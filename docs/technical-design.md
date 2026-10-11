@@ -42,7 +42,9 @@
 
 ## 2. Architecture
 
-**Stack:** Python 3.12 · FastAPI + Pydantic v2 · SQLite through stdlib `sqlite3` · argon2-cffi · Typer + httpx · uv, pytest, ruff
+**Stack:** Python 3.12 · FastAPI + Pydantic v2 · SQLite through stdlib `sqlite3` · argon2-cffi · Typer + httpx2 · uv, pytest, ruff
+
+**Dependency policy:** don't use `httpx` anywhere, including tests. Use `httpx2`, which Starlette's `TestClient` now expects.
 
 Why SQLite, hand-written SQL, and a CLI that goes through the API: [TR-1](#tr-1), [TR-2](#tr-2), [TR-4](#tr-4).
 
@@ -379,7 +381,7 @@ Every error has the same shape. A refused action lists **every** problem at once
 
 | Concern | Behaviour |
 |---|---|
-| Client | An httpx wrapper passed into commands, so tests use `TestClient` and need no server |
+| Client | An `httpx2` wrapper passed into commands, so tests use `TestClient` and need no server |
 | Auth | Token stored in `~/.config/mission-control/credentials.json` (mode 0600). Cleared on logout, password change or 401. |
 | References | Missions and assignments by ID. People by email. Skills by name. Slots by name or position. |
 | Passwords | Hidden prompt only, never a flag. Asked twice when setting one. |
