@@ -249,6 +249,15 @@ The matcher suggests crew for a Draft mission's open places. It's a pure functio
 4. **Place** that person and remove them from every other slot's candidates.
 5. **Repeat** until all places are filled or marked **unfilled**.
 
+**Inputs** (`domain/records.py`). They carry names as well as IDs, so every refusal can name the person, skill and mission involved:
+
+| Record | Fields |
+|---|---|
+| `Requirement` | `skill_id`, `skill_name`, `min_level` |
+| `SlotSpec` | `id`, `position`, `name`, `open_places`, `requirements: tuple[Requirement, ...]` |
+| `Commitment` | `mission_id`, `mission_name`, `window`: an accepted assignment on another non-final mission |
+| `CandidateFacts` | `crew_profile_id`, `name`, `active`, `skills: {skill_id: level}`, `unavailable: tuple[DateRange, ...]`, `accepted_elsewhere: tuple[Commitment, ...]`, `workload` |
+
 ```python
 def suggest_roster(slots: list[SlotSpec], candidates: list[CandidateFacts],
                    window: DateRange) -> Suggestion:
@@ -280,7 +289,7 @@ def suggest_roster(slots: list[SlotSpec], candidates: list[CandidateFacts],
 
 
 def proficiency(c: CandidateFacts, slot: SlotSpec) -> int:
-    return sum(c.skills.get(skill_id, 0) for skill_id in slot.requirements)
+    return sum(c.skills.get(r.skill_id, 0) for r in slot.requirements)
 ```
 
 **Workload** = total mission-days of accepted assignments on missions that aren't completed, leaving out the mission being matched.
@@ -374,6 +383,19 @@ Every error has the same shape. A refused action lists **every** problem at once
 | 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `already_decided`<br>**Rules:** `rule_violation` `overlap` `unavailable` `insufficient_approvers` `invalidates_assignments` `invalidates_active_assignment`<br>**Admin:** `has_open_assignments` `owns_open_missions` `last_director` `skill_in_use` |
 | 422 | Invalid input | `validation_error` `password_too_short` |
 | 503 | Database busy, retry | `busy` |
+
+**Problem codes.** These appear inside `problems` and explain each refusal. Adding one means updating this table in the same change.
+
+| Code | Raised when | Typical `refs` |
+|---|---|---|
+| `inactive` | The person is deactivated | `crew_profile_id`, `slot_id` |
+| `skill_below_minimum` | A required skill is missing or below the minimum | `crew_profile_id`, `slot_id`, `skill_id` |
+| `unavailable` | Unavailability overlaps the mission's dates | `crew_profile_id`, `slot_id` |
+| `overlap` | An accepted assignment on another mission overlaps (the message names that mission) | `crew_profile_id`, `mission_id`, `mission_name` |
+| `slot_has_open_assignments` | Removing a slot that still has crew | `assignment_id`, `crew_profile_id`, `slot_id` |
+| `headcount_below_open_assignments` | Lowering headcount below the assigned crew (the message names them) | `slot_id`, `crew_profile_ids` |
+| `invalidates_active_assignment` | A skill change would break an assignment on an Active mission | `mission_id`, `skill_id` |
+| `slot_unfilled` | Submitting with empty places | `slot_id` |
 
 ---
 
