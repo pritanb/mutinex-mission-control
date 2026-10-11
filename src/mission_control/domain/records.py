@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from mission_control.domain.dates import DateRange
+from mission_control.domain.enums import AssignmentStatus, MissionStatus
 
 
 @dataclass(frozen=True)
@@ -40,3 +41,34 @@ class CandidateFacts:
     unavailable: tuple[DateRange, ...]
     accepted_elsewhere: tuple[Commitment, ...]
     workload: int
+
+
+@dataclass(frozen=True)
+class RosterEntry:
+    """A proposed or accepted assignment on the mission being checked, edited or submitted.
+    `crew.accepted_elsewhere` must exclude this mission."""
+
+    assignment_id: int
+    slot: SlotSpec
+    crew: CandidateFacts
+    status: AssignmentStatus
+
+
+@dataclass(frozen=True)
+class AssignmentFact:
+    """One of a person's assignments, as counted towards their workload."""
+
+    mission_id: int
+    mission_status: MissionStatus
+    assignment_status: AssignmentStatus
+    window: DateRange
+
+
+@dataclass(frozen=True)
+class ActiveAssignment:
+    """An accepted assignment on an Active mission."""
+
+    mission_id: int
+    mission_name: str
+    slot_name: str
+    requirements: tuple[Requirement, ...]

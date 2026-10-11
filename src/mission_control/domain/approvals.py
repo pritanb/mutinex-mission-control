@@ -13,6 +13,18 @@ class Approver:
     active: bool
 
 
+def conflict_problems(
+    user_id: int, created_by_id: int | None, rostered_user_ids: Set[int]
+) -> list[Problem]:
+    """Why this person is too close to the mission to approve it: they created it or are on it."""
+    problems = []
+    if user_id == created_by_id:
+        problems.append(Problem("approver_is_creator", "You can't approve a mission you created"))
+    if user_id in rostered_user_ids:
+        problems.append(Problem("approver_is_rostered", "You can't approve a mission you're on"))
+    return problems
+
+
 def approver_problems(
     approver: Approver,
     created_by_id: int | None,
@@ -22,18 +34,14 @@ def approver_problems(
     """Every reason `approver` can't approve or reject this round. Empty means they can."""
     if not approver.is_director:
         return [Problem("role_forbidden", "Only Directors can approve or reject missions")]
-    problems = []
-    if approver.user_id == created_by_id:
-        problems.append(Problem("approver_is_creator", "You can't approve a mission you created"))
-    if approver.user_id in rostered_user_ids:
-        problems.append(Problem("approver_is_rostered", "You can't approve a mission you're on"))
+    problems = conflict_problems(approver.user_id, created_by_id, rostered_user_ids)
     if approver.user_id in decided_this_round:
         problems.append(Problem("already_decided", "You've already decided this round of approval"))
     return problems
 
 
 def count_eligible_approvers(
-    people: Iterable[Approver], created_by_id: int, rostered_user_ids: Set[int]
+    people: Iterable[Approver], created_by_id: int | None, rostered_user_ids: Set[int]
 ) -> int:
     """Active Directors who didn't create the mission and aren't on it."""
     return sum(
@@ -41,8 +49,7 @@ def count_eligible_approvers(
         for p in people
         if p.is_director
         and p.active
-        and p.user_id != created_by_id
-        and p.user_id not in rostered_user_ids
+        and not conflict_problems(p.user_id, created_by_id, rostered_user_ids)
     )
 
 

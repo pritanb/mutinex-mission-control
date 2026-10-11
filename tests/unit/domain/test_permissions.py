@@ -4,9 +4,9 @@ Director, Lead and Crew. "ok" means allowed; anything else is the expected Forbi
 
 import pytest
 
-from mission_control.domain.enums import Role
+from mission_control.domain.enums import Action, Role
 from mission_control.domain.errors import Forbidden
-from mission_control.domain.permissions import Action, Actor, Context, authorize, can
+from mission_control.domain.permissions import Actor, Context, authorize, can
 
 ME, OTHER, CREATOR = 1, 2, 3
 D, L, C = Role.DIRECTOR, Role.LEAD, Role.CREW
@@ -16,9 +16,9 @@ NONE = Context()
 SELF = Context(target_user_id=ME)
 NOT_SELF = Context(target_user_id=OTHER)
 OWNER = Context(owner_id=ME, created_by_id=CREATOR)
-NOT_OWNER = Context(owner_id=OTHER, created_by_id=CREATOR)
+NOT_OWNER = Context(owner_id=OTHER, created_by_id=CREATOR, rostered_user_ids=frozenset())
 ON_MISSION = Context(owner_id=OTHER, created_by_id=CREATOR, rostered_user_ids=frozenset({ME}))
-CREATED_BY_ME = Context(owner_id=OTHER, created_by_id=ME)
+CREATED_BY_ME = Context(owner_id=OTHER, created_by_id=ME, rostered_user_ids=frozenset())
 FOR_SELF = Context(owner_id=ME)
 FOR_OTHER = Context(owner_id=OTHER)
 
@@ -66,7 +66,7 @@ TABLE = [
     (Action.CANCEL, OWNER, "ok", "ok", R),
     (Action.CANCEL, NOT_OWNER, "ok", NO, R),
     # Missions: Director only
-    (Action.TRANSFER_OWNERSHIP, NOT_OWNER, "ok", R, R),
+    (Action.TRANSFER, NOT_OWNER, "ok", R, R),
     (Action.APPROVE, NOT_OWNER, "ok", R, R),
     (Action.APPROVE, CREATED_BY_ME, "approver_is_creator", R, R),
     (Action.APPROVE, ON_MISSION, "approver_is_rostered", R, R),
@@ -74,8 +74,12 @@ TABLE = [
     (Action.REJECT, CREATED_BY_ME, "approver_is_creator", R, R),
     (Action.REJECT, ON_MISSION, "approver_is_rostered", R, R),
     # Assignments: only the assignee responds
-    (Action.RESPOND_TO_ASSIGNMENT, SELF, "ok", "ok", "ok"),
-    (Action.RESPOND_TO_ASSIGNMENT, NOT_SELF, NO, NO, NO),
+    (Action.ACCEPT, SELF, "ok", "ok", "ok"),
+    (Action.ACCEPT, NOT_SELF, NO, NO, NO),
+    (Action.DECLINE, SELF, "ok", "ok", "ok"),
+    (Action.DECLINE, NOT_SELF, NO, NO, NO),
+    (Action.WITHDRAW, SELF, "ok", "ok", "ok"),
+    (Action.WITHDRAW, NOT_SELF, NO, NO, NO),
 ]
 
 CASES = [
@@ -103,7 +107,8 @@ def test_every_action_appears_in_the_table():
 
 
 def test_ac23_ana_cannot_change_her_own_skills_but_lee_can_change_hers():
-    ana = Actor(user_id=6, org_id=1, role=L, crew_profile_id=6)
+    # Ana's crew_profile_id differs from her user_id so a user-id vs profile-id mix-up shows.
+    ana = Actor(user_id=6, org_id=1, role=L, crew_profile_id=106)
     lee = Actor(user_id=4, org_id=1, role=L, crew_profile_id=None)
     with pytest.raises(Forbidden):
         authorize(ana, Action.SET_SKILL_LEVEL, Context(target_user_id=6))
@@ -124,7 +129,12 @@ def test_forbidden_carries_a_readable_message():
     crew = Actor(user_id=ME, org_id=1, role=C, crew_profile_id=1)
     with pytest.raises(Forbidden) as err:
         authorize(crew, Action.MANAGE_ORG, NONE)
-    assert err.value.message
+    message = err.value.message
+    assert message and message[0].isupper()
+    assert " " in message
+    assert "_" not in message
+    assert Action.MANAGE_ORG.value not in message
+    assert Role.CREW.value not in message.split()
 
 
 # Regression: refusal messages read as natural sentences
@@ -162,7 +172,7 @@ MESSAGES = [
     ),
     (C, Action.VIEW_MISSION, NOT_OWNER, "Crew can only view missions they're on"),
     (L, Action.EDIT_OWN_PROFILE, NOT_SELF, "You can only edit your own profile and availability"),
-    (D, Action.RESPOND_TO_ASSIGNMENT, NOT_SELF, "You can only respond to your own assignments"),
+    (D, Action.ACCEPT, NOT_SELF, "You can only respond to your own assignments"),
     (L, Action.SET_SKILL_LEVEL, SELF, "You can't change your own skill levels"),
 ]
 
@@ -178,3 +188,78 @@ def test_every_action_has_a_phrase_for_role_refusals():
     from mission_control.domain.permissions import ROLE_PHRASE
 
     assert set(ROLE_PHRASE) == set(Action)
+
+
+# Missing context is a programming error, never a silent pass
+
+REQUIRED_CONTEXT = [
+    (Action.EDIT_MISSION, L, "owner_id"),
+    (Action.PROPOSE_CREW, L, "owner_id"),
+    (Action.REMOVE_CREW, L, "owner_id"),
+    (Action.APPLY_MATCH, L, "owner_id"),
+    (Action.SUBMIT, L, "owner_id"),
+    (Action.PREVIEW_MATCH, D, "owner_id"),
+    (Action.COMPLETE, D, "owner_id"),
+    (Action.CANCEL, D, "owner_id"),
+    (Action.CREATE_MISSION, D, "owner_id"),
+    (Action.SET_SKILL_LEVEL, L, "target_user_id"),
+    (Action.EDIT_OWN_PROFILE, C, "target_user_id"),
+    (Action.ACCEPT, C, "target_user_id"),
+    (Action.DECLINE, C, "target_user_id"),
+    (Action.WITHDRAW, C, "target_user_id"),
+    (Action.VIEW_CREW, D, "target_user_id"),
+    (Action.VIEW_ASSIGNMENT_HISTORY, D, "target_user_id"),
+    (Action.VIEW_UNAVAILABILITY_REASON, D, "target_user_id"),
+    (Action.APPROVE, D, "created_by_id"),
+    (Action.REJECT, D, "created_by_id"),
+    (Action.VIEW_MISSION, D, "rostered_user_ids"),
+]
+
+
+@pytest.mark.parametrize("action, role, missing", REQUIRED_CONTEXT)
+def test_missing_required_context_is_a_programming_error(action, role, missing):
+    actor = Actor(user_id=ME, org_id=1, role=role, crew_profile_id=1)
+    with pytest.raises(ValueError, match=missing) as err:
+        authorize(actor, action, Context())
+    assert action.value in str(err.value)
+    with pytest.raises(ValueError):
+        can(actor, action, Context())
+
+
+def test_a_lead_cannot_change_skills_without_saying_whose():
+    lead = Actor(user_id=ME, org_id=1, role=L, crew_profile_id=None)
+    with pytest.raises(ValueError):
+        can(lead, Action.SET_SKILL_LEVEL)
+
+
+@pytest.mark.parametrize("action", [Action.APPROVE, Action.REJECT])
+def test_approval_needs_both_creator_and_roster(action):
+    director = Actor(user_id=ME, org_id=1, role=D, crew_profile_id=None)
+    with pytest.raises(ValueError, match="rostered_user_ids"):
+        authorize(director, action, Context(created_by_id=CREATOR))
+    with pytest.raises(ValueError, match="created_by_id"):
+        authorize(director, action, Context(rostered_user_ids=frozenset()))
+
+
+def test_an_empty_roster_is_different_from_no_roster():
+    crew = Actor(user_id=ME, org_id=1, role=C, crew_profile_id=1)
+    with pytest.raises(Forbidden):
+        authorize(crew, Action.VIEW_MISSION, Context(rostered_user_ids=frozenset()))
+    with pytest.raises(ValueError):
+        authorize(crew, Action.VIEW_MISSION, Context())
+
+
+def test_role_check_comes_before_the_context_check():
+    crew = Actor(user_id=ME, org_id=1, role=C, crew_profile_id=1)
+    with pytest.raises(Forbidden) as err:
+        authorize(crew, Action.SET_SKILL_LEVEL, Context())
+    assert err.value.code == "role_forbidden"
+
+
+def test_permission_tables_are_read_only():
+    from mission_control.domain.permissions import ROLE_PHRASE, ROLES
+
+    with pytest.raises(TypeError):
+        ROLES[Action.MANAGE_ORG] = frozenset()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        ROLE_PHRASE[Action.MANAGE_ORG] = "x"  # type: ignore[index]

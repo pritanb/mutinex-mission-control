@@ -1,14 +1,13 @@
 """Mission and assignment state machines, and the checks a mission must pass to be submitted."""
 
-from collections.abc import Sequence
-from dataclasses import dataclass
-from enum import StrEnum
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 from mission_control.domain.dates import DateRange
 from mission_control.domain.eligibility import ineligibility_reasons
-from mission_control.domain.enums import AssignmentStatus, MissionStatus
+from mission_control.domain.enums import Action, AssignmentStatus, MissionStatus
 from mission_control.domain.errors import Problem
-from mission_control.domain.records import CandidateFacts, SlotSpec
+from mission_control.domain.records import RosterEntry, SlotSpec
 
 M = MissionStatus
 A = AssignmentStatus
@@ -16,35 +15,42 @@ A = AssignmentStatus
 FINAL = frozenset({M.COMPLETED, M.CANCELLED})
 
 
-class MissionAction(StrEnum):
-    SUBMIT = "submit"
-    APPROVE = "approve"
-    REJECT = "reject"
-    TRANSFER = "transfer"
-    COMPLETE = "complete"
-    CANCEL = "cancel"
-    EDIT = "edit"  # any change to dates, slots or requirements
+# The states each mission action may start from. Its keys are the mission actions.
+MISSION_ALLOWED_FROM: Mapping[Action, frozenset[MissionStatus]] = MappingProxyType(
+    {
+        Action.SUBMIT: frozenset({M.DRAFT}),
+        Action.APPROVE: frozenset({M.PENDING_APPROVAL}),
+        Action.REJECT: frozenset({M.PENDING_APPROVAL}),
+        Action.TRANSFER: frozenset({M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE}),
+        Action.COMPLETE: frozenset({M.ACTIVE}),
+        Action.CANCEL: frozenset({M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE}),
+        Action.EDIT_MISSION: frozenset({M.DRAFT, M.PENDING_APPROVAL}),
+    }
+)
 
-
-# The states each mission action may start from.
-MISSION_ALLOWED_FROM: dict[MissionAction, frozenset[MissionStatus]] = {
-    MissionAction.SUBMIT: frozenset({M.DRAFT}),
-    MissionAction.APPROVE: frozenset({M.PENDING_APPROVAL}),
-    MissionAction.REJECT: frozenset({M.PENDING_APPROVAL}),
-    MissionAction.TRANSFER: frozenset({M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE}),
-    MissionAction.COMPLETE: frozenset({M.ACTIVE}),
-    MissionAction.CANCEL: frozenset({M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE}),
-    MissionAction.EDIT: frozenset({M.DRAFT, M.PENDING_APPROVAL}),
-}
+# How each mission action reads after "Can't ...", e.g. "Can't approve a mission in draft".
+_MISSION_VERB: Mapping[Action, str] = MappingProxyType(
+    {
+        Action.SUBMIT: "submit",
+        Action.APPROVE: "approve",
+        Action.REJECT: "reject",
+        Action.TRANSFER: "transfer",
+        Action.COMPLETE: "complete",
+        Action.CANCEL: "cancel",
+        Action.EDIT_MISSION: "edit",
+    }
+)
 
 
 # How each state reads after "a mission ...", e.g. "Can't approve a mission in draft".
-_STATE_PHRASE = {
-    M.DRAFT: "in draft",
-    M.PENDING_APPROVAL: "pending approval",
-    M.COMPLETED: "that's completed",
-    M.CANCELLED: "that's cancelled",
-}
+_STATE_PHRASE: Mapping[MissionStatus, str] = MappingProxyType(
+    {
+        M.DRAFT: "in draft",
+        M.PENDING_APPROVAL: "pending approval",
+        M.COMPLETED: "that's completed",
+        M.CANCELLED: "that's cancelled",
+    }
+)
 
 
 def _wrong_state(status: MissionStatus, doing: str) -> Problem:
@@ -55,107 +61,152 @@ def _wrong_state(status: MissionStatus, doing: str) -> Problem:
     return Problem(code, f"Can't {doing} a mission {_STATE_PHRASE[status]}")
 
 
-def state_problem(status: MissionStatus, action: MissionAction) -> Problem | None:
-    """Why `action` isn't allowed from `status`, or None if it is."""
+class StateConflict(Exception):
+    """The mission's state doesn't allow the change. `problem` says why."""
+
+    def __init__(self, problem: Problem) -> None:
+        super().__init__(problem.message)
+        self.problem = problem
+
+
+def _after_change(status: MissionStatus) -> MissionStatus:
+    """A change to a pending mission voids its approval round; otherwise status holds."""
+    return M.DRAFT if status == M.PENDING_APPROVAL else status
+
+
+def touch_for_change(status: MissionStatus) -> MissionStatus:
+    """The mission's status once a change to it is made. Every mutating service calls this
+    first. Draft stays Draft and Pending goes back to Draft; an Active or finished mission
+    can't be changed, so this raises `StateConflict`."""
+    if status not in MISSION_ALLOWED_FROM[Action.EDIT_MISSION]:
+        raise StateConflict(_wrong_state(status, _MISSION_VERB[Action.EDIT_MISSION]))
+    return _after_change(status)
+
+
+def _require_mission_action(action: Action) -> None:
+    if action not in MISSION_ALLOWED_FROM:
+        raise ValueError(f"{action!r} is not a mission action; use the assignment functions")
+
+
+def state_problem(status: MissionStatus, action: Action) -> Problem | None:
+    """Why mission `action` isn't allowed from `status`, or None if it is. Raises ValueError
+    for an action that isn't a mission action."""
+    _require_mission_action(action)
     if status in MISSION_ALLOWED_FROM[action]:
         return None
-    return _wrong_state(status, action.value)
+    return _wrong_state(status, _MISSION_VERB[action])
 
 
 def mission_status_after(
-    status: MissionStatus, action: MissionAction, *, reaches_quorum: bool = False
+    status: MissionStatus, action: Action, *, reaches_quorum: bool = False
 ) -> MissionStatus:
     """The mission's status once `action` succeeds. Check `state_problem` first."""
     if state_problem(status, action) is not None:
-        raise ValueError(f"{action.value} is not allowed from {status.value}")
+        raise ValueError(f"{_MISSION_VERB[action]} is not allowed from {status.value}")
     match action:
-        case MissionAction.SUBMIT:
+        case Action.SUBMIT:
             return M.PENDING_APPROVAL
-        case MissionAction.APPROVE:
+        case Action.APPROVE:
             return M.ACTIVE if reaches_quorum else M.PENDING_APPROVAL
-        case MissionAction.REJECT:
+        case Action.REJECT:
             return M.DRAFT
-        case MissionAction.COMPLETE:
+        case Action.COMPLETE:
             return M.COMPLETED
-        case MissionAction.CANCEL:
+        case Action.CANCEL:
             return M.CANCELLED
-        case MissionAction.EDIT | MissionAction.TRANSFER:
-            # A change to a pending mission voids its approval round; otherwise status holds.
-            return M.DRAFT if status == M.PENDING_APPROVAL else status
+        case Action.EDIT_MISSION | Action.TRANSFER:
+            return _after_change(status)
 
 
 # Assignments
 
 
-class AssignmentAction(StrEnum):
-    PROPOSE = "propose"
-    ACCEPT = "accept"
-    DECLINE = "decline"
-    WITHDRAW = "withdraw"
-    REMOVE = "remove"
+# action -> (assignment states it may start from, mission states it's allowed in). Its keys
+# are the assignment actions. PROPOSE_CREW creates the assignment, so it has no starting state.
+_ASSIGNMENT_RULES: Mapping[
+    Action, tuple[frozenset[AssignmentStatus] | None, frozenset[MissionStatus]]
+] = MappingProxyType(
+    {
+        Action.PROPOSE_CREW: (None, frozenset({M.DRAFT, M.PENDING_APPROVAL})),
+        Action.ACCEPT: (frozenset({A.PROPOSED}), frozenset({M.DRAFT})),
+        Action.DECLINE: (frozenset({A.PROPOSED}), frozenset({M.DRAFT})),
+        Action.WITHDRAW: (
+            frozenset({A.ACCEPTED}),
+            frozenset({M.DRAFT, M.PENDING_APPROVAL}),
+        ),
+        Action.REMOVE_CREW: (
+            frozenset({A.PROPOSED, A.ACCEPTED}),
+            frozenset({M.DRAFT, M.PENDING_APPROVAL}),
+        ),
+    }
+)
 
-
-# action -> (assignment states it may start from, mission states it's allowed in).
-# PROPOSE creates the assignment, so it has no starting state.
-_ASSIGNMENT_RULES: dict[
-    AssignmentAction, tuple[frozenset[AssignmentStatus] | None, frozenset[MissionStatus]]
-] = {
-    AssignmentAction.PROPOSE: (None, frozenset({M.DRAFT, M.PENDING_APPROVAL})),
-    AssignmentAction.ACCEPT: (frozenset({A.PROPOSED}), frozenset({M.DRAFT})),
-    AssignmentAction.DECLINE: (frozenset({A.PROPOSED}), frozenset({M.DRAFT})),
-    AssignmentAction.WITHDRAW: (frozenset({A.ACCEPTED}), frozenset({M.DRAFT, M.PENDING_APPROVAL})),
-    AssignmentAction.REMOVE: (
-        frozenset({A.PROPOSED, A.ACCEPTED}),
-        frozenset({M.DRAFT, M.PENDING_APPROVAL}),
-    ),
-}
-
-_ASSIGNMENT_RESULT = {
-    AssignmentAction.PROPOSE: A.PROPOSED,
-    AssignmentAction.ACCEPT: A.ACCEPTED,
-    AssignmentAction.DECLINE: A.DECLINED,
-    AssignmentAction.WITHDRAW: A.WITHDRAWN,
-    AssignmentAction.REMOVE: A.REMOVED,
-}
+_ASSIGNMENT_RESULT: Mapping[Action, AssignmentStatus] = MappingProxyType(
+    {
+        Action.PROPOSE_CREW: A.PROPOSED,
+        Action.ACCEPT: A.ACCEPTED,
+        Action.DECLINE: A.DECLINED,
+        Action.WITHDRAW: A.WITHDRAWN,
+        Action.REMOVE_CREW: A.REMOVED,
+    }
+)
 
 # How each assignment action reads before "a mission ...".
-_ASSIGNMENT_PHRASE = {
-    AssignmentAction.PROPOSE: "propose crew for",
-    AssignmentAction.ACCEPT: "accept a proposal on",
-    AssignmentAction.DECLINE: "decline a proposal on",
-    AssignmentAction.WITHDRAW: "withdraw from",
-    AssignmentAction.REMOVE: "remove crew from",
-}
+_ASSIGNMENT_PHRASE: Mapping[Action, str] = MappingProxyType(
+    {
+        Action.PROPOSE_CREW: "propose crew for",
+        Action.ACCEPT: "accept a proposal on",
+        Action.DECLINE: "decline a proposal on",
+        Action.WITHDRAW: "withdraw from",
+        Action.REMOVE_CREW: "remove crew from",
+    }
+)
 
 # Actions that change the roster, and so send a pending mission back to Draft.
-_ROSTER_CHANGES = frozenset(
-    {AssignmentAction.PROPOSE, AssignmentAction.WITHDRAW, AssignmentAction.REMOVE}
+_ROSTER_CHANGES = frozenset({Action.PROPOSE_CREW, Action.WITHDRAW, Action.REMOVE_CREW})
+
+# How each assignment action reads before "an assignment ...".
+_ASSIGNMENT_VERB: Mapping[Action, str] = MappingProxyType(
+    {
+        Action.PROPOSE_CREW: "propose",
+        Action.ACCEPT: "accept",
+        Action.DECLINE: "decline",
+        Action.WITHDRAW: "withdraw",
+        Action.REMOVE_CREW: "remove",
+    }
 )
 
 
+def _require_assignment_action(action: Action) -> None:
+    if action not in _ASSIGNMENT_RULES:
+        raise ValueError(f"{action!r} is not an assignment action; use the mission functions")
+
+
 def assignment_problem(
-    action: AssignmentAction, current: AssignmentStatus | None, mission: MissionStatus
+    action: Action, current: AssignmentStatus | None, mission: MissionStatus
 ) -> Problem | None:
-    """Why `action` isn't allowed, or None. Mission state is checked before assignment state."""
+    """Why assignment `action` isn't allowed, or None. Mission state is checked before
+    assignment state. Raises ValueError for an action that isn't an assignment action."""
+    _require_assignment_action(action)
     from_states, mission_states = _ASSIGNMENT_RULES[action]
     if mission not in mission_states:
         return _wrong_state(mission, _ASSIGNMENT_PHRASE[action])
     if from_states is not None and current not in from_states:
         label = current.value if current else "missing"
-        return Problem("invalid_transition", f"Can't {action.value} an assignment that is {label}")
+        return Problem(
+            "invalid_transition", f"Can't {_ASSIGNMENT_VERB[action]} an assignment that is {label}"
+        )
     return None
 
 
-def assignment_status_after(action: AssignmentAction) -> AssignmentStatus:
+def assignment_status_after(action: Action) -> AssignmentStatus:
+    _require_assignment_action(action)
     return _ASSIGNMENT_RESULT[action]
 
 
-def mission_status_after_assignment_action(
-    mission: MissionStatus, action: AssignmentAction
-) -> MissionStatus:
-    if action in _ROSTER_CHANGES and mission == M.PENDING_APPROVAL:
-        return M.DRAFT
-    return mission
+def mission_status_after_assignment_action(mission: MissionStatus, action: Action) -> MissionStatus:
+    _require_assignment_action(action)
+    return _after_change(mission) if action in _ROSTER_CHANGES else mission
 
 
 def cascade(mission_final_status: MissionStatus, assignment: AssignmentStatus) -> AssignmentStatus:
@@ -170,16 +221,6 @@ def cascade(mission_final_status: MissionStatus, assignment: AssignmentStatus) -
 # Submit guard
 
 
-@dataclass(frozen=True)
-class RosterEntry:
-    """An open assignment on the mission being submitted."""
-
-    assignment_id: int
-    slot: SlotSpec
-    crew: CandidateFacts  # accepted_elsewhere must exclude this mission
-    status: AssignmentStatus  # proposed or accepted
-
-
 def roster_problems(roster: Sequence[RosterEntry], window: DateRange) -> list[Problem]:
     """Accepted crew who are no longer eligible, e.g. after a skill change. Checked at submit
     and again at every approval."""
@@ -191,7 +232,7 @@ def roster_problems(roster: Sequence[RosterEntry], window: DateRange) -> list[Pr
     ]
 
 
-def submit_problems(
+def check_submit(
     slots: Sequence[SlotSpec],
     roster: Sequence[RosterEntry],
     window: DateRange,
@@ -199,7 +240,11 @@ def submit_problems(
     approvals_required: int,
 ) -> list[Problem]:
     """Everything stopping a Draft mission being submitted, all at once. `slots[i].open_places`
-    is headcount minus open assignments."""
+    is headcount minus open assignments.
+
+    The order is part of the contract, and callers show problems in it: unfilled places (in
+    slot order), then unanswered proposals, then accepted crew who are no longer eligible (in
+    roster order), then too few eligible approvers."""
     problems: list[Problem] = []
     for s in slots:
         if s.open_places > 0:

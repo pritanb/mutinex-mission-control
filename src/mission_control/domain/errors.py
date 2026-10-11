@@ -1,14 +1,19 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
 class Problem:
-    """One reason an action can't go ahead. `refs` names the records involved."""
+    """One reason an action can't go ahead. `refs` names the records involved. It is copied
+    into a read-only mapping, so no two problems share it and it can't be changed later."""
 
     code: str
     message: str
     refs: Mapping[str, int | str | list[int]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "refs", MappingProxyType(dict(self.refs)))
 
 
 class Forbidden(Exception):

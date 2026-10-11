@@ -1,6 +1,7 @@
 from mission_control.domain.approvals import (
     Approver,
     approver_problems,
+    conflict_problems,
     count_eligible_approvers,
     reaches_quorum,
 )
@@ -66,6 +67,30 @@ def test_every_approver_problem_is_reported_together():
     assert codes == {"approver_is_creator", "approver_is_rostered", "already_decided"}
 
 
+def test_conflict_problems_lists_creator_then_roster():
+    problems = conflict_problems(RUTH, created_by_id=RUTH, rostered_user_ids={RUTH})
+    assert [(p.code, p.message) for p in problems] == [
+        ("approver_is_creator", "You can't approve a mission you created"),
+        ("approver_is_rostered", "You can't approve a mission you're on"),
+    ]
+
+
+def test_conflict_problems_is_empty_for_an_unrelated_director():
+    assert conflict_problems(MARCO, created_by_id=RUTH, rostered_user_ids={INGRID}) == []
+    assert conflict_problems(MARCO, created_by_id=None, rostered_user_ids=set()) == []
+
+
+def test_approver_problems_keeps_its_order_and_messages():
+    problems = approver_problems(
+        director(RUTH), created_by_id=RUTH, rostered_user_ids={RUTH}, decided_this_round={RUTH}
+    )
+    assert [p.message for p in problems] == [
+        "You can't approve a mission you created",
+        "You can't approve a mission you're on",
+        "You've already decided this round of approval",
+    ]
+
+
 # --- Counting eligible approvers at submit (AC-12) ----------------------------------------
 
 
@@ -96,6 +121,7 @@ def test_ac13_single_approval_is_enough_when_n_is_one():
     assert reaches_quorum(approvals_in_round=1, approvals_required=1)
 
 
-def test_a1_earlier_approvals_count_even_if_that_director_is_gone():
-    # The count comes from approvals recorded this round; who is still active doesn't matter.
+def test_a1_quorum_uses_only_the_recorded_approval_count():
+    # reaches_quorum sees only the number of approvals recorded this round. Whether a Director who
+    # approved earlier has since left is a service-level concern, covered in M13.
     assert reaches_quorum(approvals_in_round=2, approvals_required=2)

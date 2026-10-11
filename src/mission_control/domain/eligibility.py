@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus
 from mission_control.domain.errors import Problem
-from mission_control.domain.records import CandidateFacts, Requirement, SlotSpec
+from mission_control.domain.records import (
+    ActiveAssignment,
+    AssignmentFact,
+    CandidateFacts,
+    Requirement,
+    RosterEntry,
+    SlotSpec,
+)
 
 
 def _span(window: DateRange) -> str:
@@ -81,14 +88,6 @@ def _skill_shortfalls(
 # Workload
 
 
-@dataclass(frozen=True)
-class AssignmentFact:
-    mission_id: int
-    mission_status: MissionStatus
-    assignment_status: AssignmentStatus
-    window: DateRange
-
-
 def workload(assignments: Iterable[AssignmentFact], excluding_mission_id: int) -> int:
     """Mission-days of accepted assignments on missions that aren't completed."""
     return sum(
@@ -101,16 +100,6 @@ def workload(assignments: Iterable[AssignmentFact], excluding_mission_id: int) -
 
 
 # Edits that would invalidate open assignments
-
-
-@dataclass(frozen=True)
-class OpenAssignment:
-    """A proposed or accepted assignment on the mission being edited."""
-
-    assignment_id: int
-    slot_id: int
-    slot_name: str
-    crew: CandidateFacts  # accepted_elsewhere must exclude the mission being edited
 
 
 @dataclass(frozen=True)
@@ -133,48 +122,45 @@ class DatesEdit:
 MissionEditKind = SlotRemoval | SlotEdit | DatesEdit
 
 
-def invalidated_by(
-    edit: MissionEditKind, open_assignments: Sequence[OpenAssignment]
-) -> list[Problem]:
+def invalidated_by(edit: MissionEditKind, roster: Sequence[RosterEntry]) -> list[Problem]:
     """Every open assignment the edit would break. Empty means the edit is safe."""
     if isinstance(edit, DatesEdit):
         return [
-            _in_slot(a, p)
-            for a in open_assignments
-            for p in _availability_conflicts(a.crew, edit.window, _refs(a))
+            _in_slot(e, p)
+            for e in roster
+            for p in _availability_conflicts(e.crew, edit.window, _refs(e))
         ]
 
-    in_slot = [a for a in open_assignments if a.slot_id == edit.slot_id]
+    in_slot = [e for e in roster if e.slot.id == edit.slot_id]
 
     if isinstance(edit, SlotRemoval):
         return [
             Problem(
                 "slot_has_open_assignments",
-                f"{a.slot_name}: {a.crew.name} is still assigned",
-                _refs(a),
+                f"{e.slot.name}: {e.crew.name} is still assigned",
+                _refs(e),
             )
-            for a in in_slot
+            for e in in_slot
         ]
 
     problems: list[Problem] = []
     if edit.headcount is not None and edit.headcount < len(in_slot):
-        names = _join_names([a.crew.name for a in in_slot])
+        names = _join_names([e.crew.name for e in in_slot])
         problems.append(
             Problem(
                 "headcount_below_open_assignments",
-                f"{in_slot[0].slot_name}: {names} are assigned, more than the new headcount "
+                f"{in_slot[0].slot.name}: {names} are assigned, more than the new headcount "
                 f"of {edit.headcount}",
                 {
                     "slot_id": edit.slot_id,
-                    "crew_profile_ids": [a.crew.crew_profile_id for a in in_slot],
+                    "crew_profile_ids": [e.crew.crew_profile_id for e in in_slot],
                 },
             )
         )
     if edit.requirements is not None:
-        for a in in_slot:
-            ref = {"crew_profile_id": a.crew.crew_profile_id, "slot_id": a.slot_id}
+        for e in in_slot:
             problems.extend(
-                _in_slot(a, p) for p in _skill_shortfalls(a.crew, edit.requirements, ref)
+                _in_slot(e, p) for p in _skill_shortfalls(e.crew, edit.requirements, _refs(e))
             )
     return problems
 
@@ -183,29 +169,21 @@ def _join_names(names: list[str]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def _refs(a: OpenAssignment) -> dict[str, int | str]:
+def _refs(e: RosterEntry) -> dict[str, int | str]:
+    """The records every problem about this assignment names."""
     return {
-        "assignment_id": a.assignment_id,
-        "crew_profile_id": a.crew.crew_profile_id,
-        "slot_id": a.slot_id,
+        "assignment_id": e.assignment_id,
+        "crew_profile_id": e.crew.crew_profile_id,
+        "slot_id": e.slot.id,
     }
 
 
-def _in_slot(a: OpenAssignment, p: Problem) -> Problem:
-    return Problem(p.code, f"{a.slot_name}: {p.message}", {**p.refs, **_refs(a)})
+def _in_slot(e: RosterEntry, p: Problem) -> Problem:
+    """`p` with the slot's name in front of its message."""
+    return Problem(p.code, f"{e.slot.name}: {p.message}", p.refs)
 
 
 # Skill changes against Active assignments
-
-
-@dataclass(frozen=True)
-class ActiveAssignment:
-    """An accepted assignment on an Active mission."""
-
-    mission_id: int
-    mission_name: str
-    slot_name: str
-    requirements: tuple[Requirement, ...]
 
 
 def invalidated_by_skill_change(

@@ -257,6 +257,9 @@ The matcher suggests crew for a Draft mission's open places. It's a pure functio
 | `SlotSpec` | `id`, `position`, `name`, `open_places`, `requirements: tuple[Requirement, ...]` |
 | `Commitment` | `mission_id`, `mission_name`, `window`: an accepted assignment on another non-final mission |
 | `CandidateFacts` | `crew_profile_id`, `name`, `active`, `skills: {skill_id: level}`, `unavailable: tuple[DateRange, ...]`, `accepted_elsewhere: tuple[Commitment, ...]`, `workload` |
+| `RosterEntry` | `assignment_id`, `slot: SlotSpec`, `crew: CandidateFacts`, `status`: an open assignment on the mission being edited or submitted (`crew.accepted_elsewhere` excludes this mission) |
+| `AssignmentFact` | `mission_id`, `mission_status`, `assignment_status`, `window`: one of a person's assignments, used to compute workload |
+| `ActiveAssignment` | `mission_id`, `mission_name`, `slot_name`, `requirements`: an accepted assignment on an Active mission, used to check skill changes |
 
 ```python
 def suggest_roster(slots: list[SlotSpec], candidates: list[CandidateFacts],
@@ -361,7 +364,7 @@ def proficiency(c: CandidateFacts, slot: SlotSpec) -> int:
 
 #### Errors
 
-Every error has the same shape. A refused action lists **every** problem at once, and each problem names the record involved:
+Every error has the same shape, for every status code (401, 403, 404, 409, 422, 503). `problems` is always present and always has at least one entry, so clients only ever handle one format. A rule or state conflict (409) lists **every** problem at once. A permission refusal (403) lists its single reason, because only one applies and the actor can't fix it themselves. Each problem names the record involved:
 
 ```json
 {
@@ -471,7 +474,7 @@ flowchart LR
 | M13 | approvals | S1, S6, S7, S8 · audit trail (AC-1) |
 | M14 | matching service | Preview writes nothing (AC-22) · apply · isolation (AC-31) · S3b |
 | **Phase 4** | | |
-| M15 | API | Error mapping · permissions over HTTP · isolation sweep (S9) · scenarios |
+| M15 | API | Error mapping: **every** error body has a non-empty `problems` list, 403/404/401/422/503 included · permissions over HTTP · isolation sweep (S9) · scenarios |
 | M16 | CLI | Reference resolution · `--slot` parser · prompts · exit codes · S1, S4 |
 | M17 | README | Smoke-test the README commands |
 
