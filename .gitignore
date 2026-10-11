@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environment (uv.lock IS committed)
+.venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local SQLite data (recreate with: uv run mc-admin seed --reset)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets and local config
+.env
+.claude/settings.local.json
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/

@@ -450,14 +450,16 @@ flowchart LR
 | M16 | CLI | Reference resolution · `--slot` parser · prompts · exit codes · S1, S4 |
 | M17 | README | Smoke-test the README commands |
 
-**Can run in parallel:** M3 ∥ M4 · M5 ∥ M6 · M10 ∥ M11
+**Independent modules:** M3 ∥ M4 · M5 ∥ M6 · M10 ∥ M11. A team could split these; an agent still works on one approved module at a time.
 
 **Definition of done (every module)**
 - [ ] Tests were written first, and each test name includes the PRD ID it covers.
 - [ ] `uv run pytest` and `uv run ruff check` both pass on the whole repo.
 - [ ] No layer-boundary violations ([§10](#10-guidelines-for-implementing-agents)).
 - [ ] Any new endpoint is added to the isolation sweep.
-- [ ] One focused commit, with a message that names the module.
+- [ ] The module was verified by actually running it, and the output was shown, not just the test results.
+- [ ] A read-only review of the diff was done and its findings reported.
+- [ ] A commit was **proposed**, and made only after the user approved it.
 
 ---
 
@@ -466,14 +468,16 @@ flowchart LR
 ### Source of truth
 1. The **PRD** decides behaviour. **This document** decides structure. Code follows both.
 2. **Don't invent behaviour.** If the PRD is silent or contradicts this document, stop and ask. Don't guess, and don't "improve" the rule.
-3. Work on **one module at a time**, in the order in [§9](#9-delivery-plan). Don't start a module before its dependencies are done.
+3. Work on **one module at a time**, in the order in [§9](#9-delivery-plan). Start a module only when the user has approved it, and never before its dependencies are done.
 
 ### The loop for each module
 1. Read the module's row in §9 and every PRD ID it references.
 2. Write failing tests. Name them after the rule, for example `test_ac15_accept_overlap_names_conflicting_mission`.
 3. Write the smallest implementation that makes them pass.
 4. Refactor, then run the **full** suite and `ruff`.
-5. Commit with a message like `feat(m12): assignment propose/accept/withdraw`.
+5. Verify the behaviour by running it for real (a REPL call, a request, or a CLI command), and show the output.
+6. Do a read-only review of the diff, and report findings without editing anything.
+7. Propose a commit message, such as `feat(m12): assignment propose/accept/withdraw`. **Don't commit, and don't start the next module, until the user approves.**
 
 ### Architecture rules (never break these)
 - `domain/` imports nothing from `infra/`, `services/`, `api/` or `sqlite3`.
@@ -481,7 +485,7 @@ flowchart LR
 - `org_id` comes only from the `Actor`. Never read it from request input.
 - Every mutating service calls `touch_for_change()` first, and writes an audit event in the same transaction.
 - Writes open `BEGIN IMMEDIATE` **before** running checks.
-- Errors use the codes in [§7](#7-api). Adding a code means updating that table in the same commit.
+- Errors use the codes in [§7](#7-api). Adding a code means updating that table in the same change.
 
 ### Coding conventions
 - Type hints everywhere. Frozen dataclasses for domain records. No module-level mutable state.
