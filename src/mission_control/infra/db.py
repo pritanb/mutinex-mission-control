@@ -7,6 +7,7 @@ database write lock *before* any checks run, so check-then-write rules can't rac
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
@@ -55,6 +56,16 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode = WAL")
 
 
+def utc_timestamp(moment: datetime) -> str:
+    """A time as stored in the database: UTC with millisecond precision, in the same format the
+    schema's defaults write, so stored values compare correctly as text. Naive times are refused,
+    because their time zone is unknown."""
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("a timestamp needs a time zone")
+    utc = moment.astimezone(UTC)
+    return f"{utc:%Y-%m-%dT%H:%M:%S}.{utc.microsecond // 1000:03d}Z"
+
+
 def _is_locked(error: sqlite3.OperationalError) -> bool:
     return "locked" in str(error) or "busy" in str(error)
 
@@ -88,9 +99,15 @@ def write_tx(conn: sqlite3.Connection) -> Generator[sqlite3.Connection]:
 
 @contextmanager
 def read_tx(conn: sqlite3.Connection) -> Generator[sqlite3.Connection]:
-    """Run several reads against one consistent snapshot."""
+    """Run several reads against one consistent snapshot. Ends with COMMIT on success and
+    ROLLBACK on any error, so nothing written by a failing block is kept and the original error
+    always reaches the caller."""
     conn.execute("BEGIN")
     try:
         yield conn
-    finally:
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    if conn.in_transaction:
         conn.execute("COMMIT")

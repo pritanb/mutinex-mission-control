@@ -1,7 +1,7 @@
 """M8: passwords, sessions and request authentication (design §4 Authentication, PRD P7, P10)."""
 
 import hashlib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -79,6 +79,7 @@ def test_ac26_deactivated_user_cannot_log_in(db):
     with pytest.raises(Unauthenticated) as err:
         login(db)
     assert err.value.code == "invalid_credentials"
+    assert err.value.message == "Email or password is incorrect"
 
 
 def test_only_the_token_hash_is_stored(db):
@@ -134,6 +135,14 @@ def test_token_expires_after_12_hours(db):
     auth.authenticate(db, token, now=NOW + timedelta(hours=11, minutes=59))
     with pytest.raises(Unauthenticated):
         auth.authenticate(db, token, now=NOW + timedelta(hours=12))
+
+
+def test_token_expiry_works_with_a_non_utc_login_time(db):
+    sydney = timezone(timedelta(hours=10))
+    token = login(db, now=datetime(2027, 1, 5, 19, 0, tzinfo=sydney)).token  # 09:00 UTC
+    auth.authenticate(db, token, now=datetime(2027, 1, 5, 20, 59, tzinfo=UTC))
+    with pytest.raises(Unauthenticated):
+        auth.authenticate(db, token, now=datetime(2027, 1, 5, 21, 0, tzinfo=UTC))
 
 
 def test_role_is_read_fresh_on_every_request(db):
@@ -255,3 +264,116 @@ def test_tests_run_with_cheap_but_still_argon2id_hashes():
     hashed = security.hash_password("correct horse battery staple")
     assert hashed.startswith("$argon2id$")
     assert "m=65536,t=3,p=4" not in hashed
+
+
+# Regression: no Argon2 work runs while the write lock is held
+
+
+def _record_transaction_state(db, monkeypatch):
+    """Wrap the Argon2 calls to record whether a transaction was open at call time."""
+    seen = []
+    real_verify, real_hash = security.verify_password, security.hash_password
+
+    def verify(password_hash, password):
+        seen.append(("verify", db.in_transaction))
+        return real_verify(password_hash, password)
+
+    def hash_password(password):
+        seen.append(("hash", db.in_transaction))
+        return real_hash(password)
+
+    monkeypatch.setattr(security, "verify_password", verify)
+    monkeypatch.setattr(security, "hash_password", hash_password)
+    return seen
+
+
+@pytest.mark.parametrize(
+    "email, password, refused",
+    [
+        ("lee@aurora.example", DEMO_PASSWORD, False),
+        ("lee@aurora.example", "wrong passphrase entirely", True),
+        ("nobody@aurora.example", DEMO_PASSWORD, True),
+    ],
+)
+def test_login_runs_argon2_outside_the_write_transaction(db, monkeypatch, email, password, refused):
+    seen = _record_transaction_state(db, monkeypatch)
+    if refused:
+        with pytest.raises(Unauthenticated):
+            login(db, email=email, password=password)
+    else:
+        login(db, email=email, password=password)
+    assert seen == [("verify", False)]
+
+
+def test_login_rehash_runs_argon2_outside_the_write_transaction(db, monkeypatch):
+    old = db.execute("SELECT password_hash FROM users WHERE id = ?", (LEE,)).fetchone()[0]
+    monkeypatch.setattr(security, "needs_rehash", lambda h: True)
+    seen = _record_transaction_state(db, monkeypatch)
+    login(db)
+    assert seen == [("verify", False), ("hash", False)]
+    new = db.execute("SELECT password_hash FROM users WHERE id = ?", (LEE,)).fetchone()[0]
+    assert new != old
+
+
+def test_change_password_runs_argon2_outside_the_write_transaction(db, monkeypatch):
+    actor = auth.authenticate(db, login(db).token, now=NOW)
+    seen = _record_transaction_state(db, monkeypatch)
+    auth.change_password(db, actor, DEMO_PASSWORD, "a brand new passphrase", now=NOW)
+    assert seen == [("verify", False), ("hash", False)]
+
+
+def _change_hash_during_verify(db, monkeypatch):
+    """Simulate another request changing the stored hash between the verify and the write."""
+    real_verify = security.verify_password
+
+    def verify(password_hash, password):
+        result = real_verify(password_hash, password)
+        db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (security.hash_password("someone else's new passphrase"), LEE),
+        )
+        return result
+
+    monkeypatch.setattr(security, "verify_password", verify)
+
+
+def test_login_is_refused_if_the_password_changed_after_it_was_verified(db, monkeypatch):
+    _change_hash_during_verify(db, monkeypatch)
+    with pytest.raises(Unauthenticated) as err:
+        login(db)
+    assert err.value.code == "invalid_credentials"
+    assert err.value.message == "Email or password is incorrect"
+    assert db.execute("SELECT count(*) FROM auth_tokens").fetchone()[0] == 0
+
+
+def test_login_is_refused_if_the_user_was_deactivated_after_the_verify(db, monkeypatch):
+    real_verify = security.verify_password
+
+    def verify(password_hash, password):
+        db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (LEE,))
+        return real_verify(password_hash, password)
+
+    monkeypatch.setattr(security, "verify_password", verify)
+    with pytest.raises(Unauthenticated) as err:
+        login(db)
+    assert err.value.code == "invalid_credentials"
+    assert db.execute("SELECT count(*) FROM auth_tokens").fetchone()[0] == 0
+
+
+def test_change_password_is_refused_if_the_password_changed_after_it_was_verified(db, monkeypatch):
+    session = login(db)
+    actor = auth.authenticate(db, session.token, now=NOW)
+    _change_hash_during_verify(db, monkeypatch)
+    with pytest.raises(Forbidden) as err:
+        auth.change_password(db, actor, DEMO_PASSWORD, "a brand new passphrase", now=NOW)
+    assert err.value.code == "wrong_current_password"
+    assert err.value.message == "Your current password is incorrect"
+    assert auth.authenticate(db, session.token, now=NOW).user_id == LEE
+    stored = db.execute("SELECT password_hash FROM users WHERE id = ?", (LEE,)).fetchone()[0]
+    assert security.verify_password(stored, "someone else's new passphrase")
+    assert (
+        db.execute(
+            "SELECT count(*) FROM audit_events WHERE event = 'user.password_changed'"
+        ).fetchone()[0]
+        == 0
+    )

@@ -4,15 +4,16 @@ from datetime import date
 
 import pytest
 
-from builders import make_assignment, make_crew_profile, make_mission, make_slot, make_user
+from builders import make_assignment, make_slot
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus, Role
 from mission_control.domain.permissions import Actor
-from mission_control.infra.repositories import Repos
+from mission_control.infra.repositories import Repos, _Scoped
 
 AURORA, HELIX = 1, 2
-GATEWAY, TELESCOPE, COMMS, MARS, PAYLOAD = 1, 5, 6, 7, 8
-LEE, BEN, CHEN, KAI_USER = 4, 7, 8, 16
+GATEWAY, ASTEROID, MEDICAL, TELESCOPE, COMMS, MARS, PAYLOAD = 1, 2, 4, 5, 6, 7, 8
+MARCO, LEE, BEN, CHEN, DANA, ELI, FAY, HANA = 2, 4, 7, 8, 9, 10, 11, 13
+KAI_USER, LENA = 16, 17
 
 
 @pytest.fixture
@@ -202,12 +203,81 @@ def test_history_of_another_orgs_crew_is_empty(helix):
     assert helix.crew.history(CHEN) == []
 
 
-def test_a_crew_member_in_another_org_sees_nothing_here(seeded_db):
-    # Same numeric crew_profile_id cannot leak across orgs: repos are built from the actor's org.
-    other_org = 2
-    org_user = make_user(seeded_db, other_org, name="Visitor")
-    profile = make_crew_profile(seeded_db, other_org, org_user, display_name="Visitor")
-    visitor = actor(org_user, Role.CREW, crew_profile_id=profile, org=other_org)
-    assert Repos(seeded_db, other_org).missions.list_visible(visitor) == []
-    mission = make_mission(seeded_db, other_org, owner_id=15)
-    assert Repos(seeded_db, AURORA).missions.get(mission) is None
+def test_another_orgs_crew_member_is_unknown_to_this_orgs_repos(seeded_db):
+    # Lena (Helix crew profile 17) holds an accepted assignment on Helix mission 8. Asked through
+    # Aurora's repos, neither she, her history nor that mission's roster exists.
+    aurora = Repos(seeded_db, AURORA)
+    helix = Repos(seeded_db, HELIX)
+    assert helix.crew.get(LENA) is not None
+    assert helix.crew.history(LENA) != []
+    assert LENA in helix.missions.rostered_user_ids(PAYLOAD)
+    assert aurora.crew.get(LENA) is None
+    assert aurora.crew.history(LENA) == []
+    assert aurora.missions.rostered_user_ids(PAYLOAD) == frozenset()
+
+
+# --- Mis-binding: org_id is bound by name, so placeholder order can't leak rows -------------
+
+
+class _MisorderedMissionLookup(_Scoped):
+    """Puts the org filter last; with positional binding this would read another org's row."""
+
+    def get(self, mission_id: int):
+        return self._one("SELECT * FROM missions WHERE id = :id AND org_id = :org", id=mission_id)
+
+
+def test_org_is_bound_by_name_so_placeholder_order_cannot_leak(seeded_db):
+    assert _MisorderedMissionLookup(seeded_db, HELIX).get(ASTEROID) is None
+    assert _MisorderedMissionLookup(seeded_db, AURORA).get(ASTEROID)["name"] == "Asteroid Survey"
+    assert Repos(seeded_db, HELIX).missions.get(ASTEROID) is None
+
+
+# --- One definition of "on the mission" ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mission, rostered",
+    [
+        (TELESCOPE, {CHEN, DANA, ELI, HANA}),
+        (MEDICAL, {MARCO}),
+        (GATEWAY, set()),
+        (MARS, {CHEN}),  # a completed assignment counts
+    ],
+)
+def test_rostered_user_ids_for_seeded_missions(aurora, mission, rostered):
+    assert aurora.missions.rostered_user_ids(mission) == frozenset(rostered)
+
+
+@pytest.mark.parametrize(
+    "status, reason",
+    [("declined", None), ("withdrawn", "family"), ("removed", None), ("cancelled", None)],
+)
+def test_former_assignees_are_not_rostered(seeded_db, aurora, status, reason):
+    slot = make_slot(seeded_db, AURORA, GATEWAY, name="Extra", position=9)
+    make_assignment(seeded_db, AURORA, GATEWAY, slot, FAY, LEE, status=status, reason=reason)
+    assert aurora.missions.rostered_user_ids(GATEWAY) == frozenset()
+
+
+@pytest.mark.parametrize("status", ["proposed", "accepted"])
+def test_open_assignees_are_rostered(seeded_db, aurora, status):
+    slot = make_slot(seeded_db, AURORA, GATEWAY, name="Extra", position=9)
+    make_assignment(seeded_db, AURORA, GATEWAY, slot, FAY, LEE, status=status)
+    assert aurora.missions.rostered_user_ids(GATEWAY) == frozenset({FAY})
+
+
+def test_get_visible_matches_list_visible_for_every_actor_and_mission(aurora):
+    missions = [m.id for m in aurora.missions.list()] + [PAYLOAD, 9999]
+    actors = [actor(1, Role.DIRECTOR), actor(LEE, Role.LEAD), actor(FAY, Role.CREW)]
+    actors += [actor(u, Role.CREW, crew_profile_id=u) for u in (BEN, CHEN, DANA, FAY, HANA)]
+    for a in actors:
+        visible = {m.id: m for m in aurora.missions.list_visible(a)}
+        for mission_id in missions:
+            assert aurora.missions.get_visible(a, mission_id) == visible.get(mission_id)
+
+
+def test_visibility_rejects_an_actor_from_another_org(aurora):
+    kai = actor(KAI_USER, Role.CREW, crew_profile_id=16, org=HELIX)
+    with pytest.raises(ValueError):
+        aurora.missions.list_visible(kai)
+    with pytest.raises(ValueError):
+        aurora.missions.get_visible(kai, GATEWAY)

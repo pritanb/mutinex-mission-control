@@ -12,6 +12,8 @@ from datetime import datetime
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
+from mission_control.infra.db import utc_timestamp
+
 _hasher = PasswordHasher()  # Argon2id with the library's recommended parameters
 
 
@@ -52,14 +54,15 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def iso(moment: datetime) -> str:
-    """UTC timestamp in one fixed format, so stored values compare correctly as text."""
-    return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-
 def find_login(conn: sqlite3.Connection, email: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT id, org_id, password_hash, is_active FROM users WHERE email = ?", (email,)
+    ).fetchone()
+
+
+def login_state(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT password_hash, is_active FROM users WHERE id = ?", (user_id,)
     ).fetchone()
 
 
@@ -76,7 +79,7 @@ def store_token(
 ) -> None:
     conn.execute(
         "INSERT INTO auth_tokens(user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (user_id, token_hash, iso(created), iso(expires)),
+        (user_id, token_hash, utc_timestamp(created), utc_timestamp(expires)),
     )
 
 
@@ -89,19 +92,19 @@ def find_session(conn: sqlite3.Connection, token_hash: str, now: datetime) -> sq
            LEFT JOIN crew_profiles p ON p.org_id = u.org_id AND p.user_id = u.id
            WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ?
              AND u.is_active = 1""",
-        (token_hash, iso(now)),
+        (token_hash, utc_timestamp(now)),
     ).fetchone()
 
 
 def revoke_token(conn: sqlite3.Connection, token_hash: str, now: datetime) -> None:
     conn.execute(
         "UPDATE auth_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
-        (iso(now), token_hash),
+        (utc_timestamp(now), token_hash),
     )
 
 
 def revoke_user_tokens(conn: sqlite3.Connection, user_id: int, now: datetime) -> None:
     conn.execute(
         "UPDATE auth_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
-        (iso(now), user_id),
+        (utc_timestamp(now), user_id),
     )

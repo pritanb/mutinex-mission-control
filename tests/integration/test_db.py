@@ -1,8 +1,10 @@
 """M6: connections, transactions and the schema's own guarantees (design §5, Appendix A)."""
 
+import re
 import sqlite3
 import threading
 import time
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -13,6 +15,7 @@ from mission_control.infra.db import (
     connect,
     init_db,
     read_tx,
+    utc_timestamp,
     write_tx,
 )
 
@@ -155,18 +158,20 @@ def test_lock_timeout_raises_database_busy_after_the_bounded_wait(db_path, conn)
 
 def test_a_waiting_writer_proceeds_once_the_lock_is_released(db_path, conn):
     other = connect(db_path, busy_timeout_ms=2000)
+    acquired = threading.Event()
     released = threading.Event()
 
     def hold_lock():
         with write_tx(conn):
+            acquired.set()
             conn.execute("INSERT INTO organisations(name, slug) VALUES ('A', 'a')")
             time.sleep(0.2)
         released.set()
 
     holder = threading.Thread(target=hold_lock)
     holder.start()
-    time.sleep(0.05)
     try:
+        assert acquired.wait(timeout=5)
         with write_tx(other):
             other.execute("INSERT INTO organisations(name, slug) VALUES ('B', 'b')")
         assert released.is_set()
@@ -189,6 +194,56 @@ def test_read_tx_sees_a_consistent_snapshot(db_path, conn):
         assert scalar(conn, "SELECT count(*) FROM organisations") == before + 1
     finally:
         writer.close()
+
+
+def test_a_write_inside_a_failing_read_tx_is_not_kept(conn):
+    with pytest.raises(ValueError):
+        with read_tx(conn):
+            conn.execute("INSERT INTO organisations(name, slug) VALUES ('A', 'a')")
+            raise ValueError("the block failed")
+    assert not conn.in_transaction
+    assert scalar(conn, "SELECT count(*) FROM organisations") == 0
+
+
+def test_read_tx_lets_the_original_error_through_even_if_the_block_ended_the_transaction(conn):
+    original = ValueError("the block failed after rolling back")
+    with pytest.raises(ValueError) as err:
+        with read_tx(conn):
+            conn.execute("ROLLBACK")
+            raise original
+    assert err.value is original
+    assert not conn.in_transaction
+
+
+def test_read_tx_commits_on_success(conn):
+    with read_tx(conn):
+        conn.execute("INSERT INTO organisations(name, slug) VALUES ('A', 'a')")
+    assert not conn.in_transaction
+    assert scalar(conn, "SELECT count(*) FROM organisations") == 1
+
+
+# --- Timestamps ---------------------------------------------------------------------------
+
+
+def test_utc_timestamp_converts_other_time_zones_to_utc():
+    sydney = timezone(timedelta(hours=10))
+    moment = datetime(2027, 1, 5, 19, 0, 0, 123456, tzinfo=sydney)
+    assert utc_timestamp(moment) == "2027-01-05T09:00:00.123Z"
+    assert utc_timestamp(datetime(2027, 1, 5, 9, 0, tzinfo=UTC)) == "2027-01-05T09:00:00.000Z"
+
+
+def test_utc_timestamp_refuses_a_naive_datetime():
+    with pytest.raises(ValueError):
+        utc_timestamp(datetime(2027, 1, 5, 9, 0))
+
+
+def test_utc_timestamp_has_the_same_shape_as_the_schema_defaults(conn):
+    shape = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+    from_sqlite = scalar(conn, "SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+    ours = utc_timestamp(datetime.now(UTC))
+    assert shape.match(from_sqlite)
+    assert shape.match(ours)
+    assert len(ours) == len(from_sqlite)
 
 
 def _without_comments(sql: str) -> list[str]:

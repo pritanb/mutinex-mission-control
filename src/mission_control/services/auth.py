@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from mission_control.domain.enums import Role
 from mission_control.domain.errors import Forbidden, Unauthenticated
+from mission_control.domain.events import Event
 from mission_control.domain.passwords import validate_password
 from mission_control.domain.permissions import Actor
 from mission_control.infra import security
@@ -40,19 +41,30 @@ def login(
     """Unknown email, wrong password and deactivated user all get the same refusal, so the
     response never reveals which accounts exist."""
     now = _now(now)
+    # Argon2 is slow, so it runs before the write lock is taken; the transaction then checks
+    # that nothing changed since the verify.
+    found = security.find_login(conn, email)
+    if found is None:
+        security.verify_password(security.dummy_hash(), password)  # same cost as a real check
+        raise _BAD_LOGIN
+    verified_hash = found["password_hash"]
+    if not security.verify_password(verified_hash, password):
+        raise _BAD_LOGIN
+    if not found["is_active"]:
+        raise _BAD_LOGIN
+    upgraded_hash = (
+        security.hash_password(password) if security.needs_rehash(verified_hash) else None
+    )
+    token = security.new_token()
+    expires = now + lifetime
     with write_tx(conn):
-        found = security.find_login(conn, email)
-        if found is None:
-            security.verify_password(security.dummy_hash(), password)  # same cost as a real check
+        current = security.login_state(conn, found["id"])
+        if current is None or current["password_hash"] != verified_hash:
             raise _BAD_LOGIN
-        if not security.verify_password(found["password_hash"], password):
+        if not current["is_active"]:
             raise _BAD_LOGIN
-        if not found["is_active"]:
-            raise _BAD_LOGIN
-        if security.needs_rehash(found["password_hash"]):
-            security.set_password_hash(conn, found["id"], security.hash_password(password))
-        token = security.new_token()
-        expires = now + lifetime
+        if upgraded_hash is not None:
+            security.set_password_hash(conn, found["id"], upgraded_hash)
         security.store_token(conn, found["id"], security.hash_token(token), now, expires)
         user = Repos(conn, found["org_id"]).users.get(found["id"])
     assert user is not None
@@ -86,11 +98,10 @@ def logout(conn: sqlite3.Connection, token: str, *, now: datetime | None = None)
 def revoke_all_sessions(
     conn: sqlite3.Connection, user_id: int, *, now: datetime | None = None
 ) -> None:
-    """End every session of a user. Call inside the caller's transaction when part of a larger
-    change (deactivation); this opens its own when used alone."""
-    if conn.in_transaction:
-        security.revoke_user_tokens(conn, user_id, _now(now))
-        return
+    """End every session of a user, in its own write transaction.
+
+    A service making a larger change (such as deactivating a user) doesn't call this: it calls
+    security.revoke_user_tokens inside its own write_tx, next to its audit write."""
     with write_tx(conn):
         security.revoke_user_tokens(conn, user_id, _now(now))
 
@@ -106,14 +117,22 @@ def change_password(
     """Needs the current password. Every session ends, including the one used to change it."""
     validate_password(new_password)
     now = _now(now)
+    # Argon2 runs before the write lock is taken; the transaction then checks that the stored
+    # hash is still the one the current password was verified against.
+    verified_hash = security.password_hash_of(conn, actor.user_id)
+    if not security.verify_password(verified_hash, current_password):
+        raise _wrong_current_password()
+    new_hash = security.hash_password(new_password)
     with write_tx(conn):
-        if not security.verify_password(
-            security.password_hash_of(conn, actor.user_id), current_password
-        ):
-            raise Forbidden("wrong_current_password", "Your current password is incorrect")
-        security.set_password_hash(conn, actor.user_id, security.hash_password(new_password))
+        if security.password_hash_of(conn, actor.user_id) != verified_hash:
+            raise _wrong_current_password()
+        security.set_password_hash(conn, actor.user_id, new_hash)
         security.revoke_user_tokens(conn, actor.user_id, now)
-        Repos(conn, actor.org_id).audit.record(actor.user_id, "user.password_changed")
+        Repos(conn, actor.org_id).audit.record(actor.user_id, Event.USER_PASSWORD_CHANGED)
+
+
+def _wrong_current_password() -> Forbidden:
+    return Forbidden("wrong_current_password", "Your current password is incorrect")
 
 
 def _session_error() -> Unauthenticated:

@@ -309,9 +309,19 @@ def test_seed_loads_in_one_transaction(conn, monkeypatch):
     # If loading fails part-way, nothing is left behind.
     from mission_control.seed import loader
 
-    monkeypatch.setattr(loader, "_load_helix", lambda *a, **k: 1 / 0)
+    load_mission = loader._load_mission
+    loaded_before_failure = []
+
+    def fail_at_helix(conn, org, mission):
+        if org.id == 2:
+            loaded_before_failure.append(one(conn, "SELECT count(*) FROM missions"))
+            raise ZeroDivisionError
+        load_mission(conn, org, mission)
+
+    monkeypatch.setattr(loader, "_load_mission", fail_at_helix)
     with pytest.raises(ZeroDivisionError):
         load_seed(conn, password_hash="x")
+    assert loaded_before_failure == [7]  # Aurora's missions were written before the failure
     assert one(conn, "SELECT count(*) FROM organisations") == 0
 
 
