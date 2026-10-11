@@ -467,6 +467,7 @@ flowchart LR
 | M7 | repos, seed | Seed matches PRD §9 · scoped `get` · V2 visibility · SQL lint |
 | M8 | auth | Login · inactive user · expiry · every revocation path · role read fresh |
 | **Phase 3** | | |
+| SF | service foundation | Service context (actor + `Repos` + transaction + audit) · `RuleViolation` carrying problems · refused view becomes not-found · fact loaders building `CandidateFacts` / `RosterEntry` / `AssignmentFact` / `ActiveAssignment` from the database · the repository writes Wave 1 needs |
 | M9 | admin | P1, P7–P10 · last Director (AC-25, 26) |
 | M10 | crew | Self-only edits (AC-16) · skill rules (AC-23) · reasons hidden (AC-24) |
 | M11 | missions | M7 · back to Draft (AC-4) · Active freeze · transfer (AC-7) |
@@ -478,7 +479,16 @@ flowchart LR
 | M16 | CLI | Reference resolution · `--slot` parser · prompts · exit codes · S1, S4 |
 | M17 | README | Smoke-test the README commands |
 
-**Independent modules:** M3 ∥ M4 · M5 ∥ M6 · M10 ∥ M11. A team could split these; an agent still works on one approved module at a time.
+**Waves.** Independent modules may be built at the same time, each in its own git worktree ([§10](#working-in-waves-worktrees)), and then reviewed and committed one at a time. Phase 3 runs as:
+
+```
+SF service foundation (on main)
+  → Wave 1: M9 admin ∥ M10 crew ∥ M11 missions
+  → M12 assignments
+  → Wave 3: M13 approvals ∥ M14 matching service
+```
+
+SF comes first so the waves share one service context and one set of fact loaders instead of each writing their own. Earlier pairs that were independent: M3 ∥ M4, M5 ∥ M6.
 
 **Definition of done (every module)**
 - [ ] Tests were written first, and each test name includes the PRD ID it covers.
@@ -506,6 +516,15 @@ flowchart LR
 5. Verify the behaviour by running it for real (a REPL call, a request, or a CLI command), and show the output.
 6. Do a read-only review of the diff, and report findings without editing anything.
 7. Propose a commit message, such as `feat(m12): assignment propose/accept/withdraw`. **Don't commit, and don't start the next module, until the user approves.**
+
+### Working in waves (worktrees)
+- **Approval:** a wave starts only when the user approves every module in it. The modules must not depend on each other.
+- **Isolation:** each module gets its own worktree and branch, `.worktrees/<module>` on branch `<module>` (e.g. `m9-admin`), created from the current `main`. The agent works only inside it and runs `uv sync` and the tests there.
+- **Agents don't commit.** Each leaves its changes uncommitted and reports the usual package: tests first, real run, read-only review.
+- **Review is one branch at a time.** The user reviews only that module's diff against `main`.
+- **Merge:** after approval, the lead commits on the branch, rebases it onto `main` if `main` has moved (re-running its tests), fast-forwards `main`, and runs the full suite on `main` before the next review.
+- **Ports:** a real run that starts a server uses port `8000 + module number` (e.g. M11 uses 8011).
+- **Clean-up:** remove the worktree and branch once merged.
 
 ### Architecture rules (never break these)
 - `domain/` imports nothing from `infra/`, `services/`, `api/` or `sqlite3`.

@@ -28,3 +28,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Git worktrees for parallel modules (design §10)
+.worktrees/
