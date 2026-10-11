@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Multi-tenant mission planning API and CLI"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "fastapi>=0.115",
     "uvicorn>=0.30",
 ]

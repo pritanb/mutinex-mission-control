@@ -23,3 +23,12 @@ class Forbidden(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class Unauthenticated(Exception):
+    """No valid identity: bad credentials, or a missing, expired or revoked session."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message

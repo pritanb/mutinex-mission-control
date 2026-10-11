@@ -6,8 +6,9 @@ Looking up another organisation's id returns None, exactly like a missing id.
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import date
 
 from mission_control.domain.dates import DateRange
@@ -280,6 +281,40 @@ def _approval(r: sqlite3.Row) -> Approval:
     )
 
 
+class AuditRepo(_Scoped):
+    def record(
+        self,
+        actor_id: int,
+        event: str,
+        *,
+        mission_id: int | None = None,
+        assignment_id: int | None = None,
+        crew_profile_id: int | None = None,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        reason: str | None = None,
+        data: Mapping[str, object] | None = None,
+    ) -> None:
+        """Append one event. `data` should hold the names involved at the time."""
+        self._conn.execute(
+            "INSERT INTO audit_events(org_id, actor_id, event, mission_id, assignment_id,"
+            " crew_profile_id, from_status, to_status, reason, data)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                self._org,
+                actor_id,
+                event,
+                mission_id,
+                assignment_id,
+                crew_profile_id,
+                from_status,
+                to_status,
+                reason,
+                json.dumps(dict(data or {})),
+            ),
+        )
+
+
 class Repos:
     """All repositories for one organisation, built from the authenticated actor."""
 
@@ -292,3 +327,4 @@ class Repos:
         self.missions = MissionRepo(conn, org_id)
         self.assignments = AssignmentRepo(conn, org_id)
         self.approvals = ApprovalRepo(conn, org_id)
+        self.audit = AuditRepo(conn, org_id)
