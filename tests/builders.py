@@ -132,3 +132,94 @@ ASTEROID_WINDOW = date_range("2027-03-05", "2027-03-12")
 PILOT = slot(req(PILOTING, 4), id=31, position=1, name="Pilot")
 GEOLOGIST = slot(req(GEOLOGY, 4), id=32, position=2, name="Geologist")
 ASTEROID_SLOTS = (PILOT, GEOLOGIST)
+
+
+# --- Database builders (focused fixtures for integration tests) ---------------------------
+# Thin INSERT helpers with defaults. Each returns the new row's id.
+
+
+def make_org(conn, name="Test Org", slug=None, required_approvals=1) -> int:
+    cur = conn.execute(
+        "INSERT INTO organisations(name, slug, required_approvals) VALUES (?, ?, ?)",
+        (name, slug or name.lower().replace(" ", "-"), required_approvals),
+    )
+    return cur.lastrowid
+
+
+def make_user(conn, org_id, name="Test User", role="crew", email=None, is_active=True) -> int:
+    cur = conn.execute(
+        "INSERT INTO users(org_id, email, name, role, password_hash, is_active)"
+        " VALUES (?, ?, ?, ?, 'test-hash', ?)",
+        (
+            org_id,
+            email or f"{name.lower().replace(' ', '.')}.{org_id}@test.example",
+            name,
+            role,
+            int(is_active),
+        ),
+    )
+    return cur.lastrowid
+
+
+def make_crew_profile(conn, org_id, user_id, display_name="Test Crew") -> int:
+    cur = conn.execute(
+        "INSERT INTO crew_profiles(org_id, user_id, display_name) VALUES (?, ?, ?)",
+        (org_id, user_id, display_name),
+    )
+    return cur.lastrowid
+
+
+def make_mission(
+    conn,
+    org_id,
+    owner_id,
+    created_by_id=None,
+    name="Test Mission",
+    start="2027-06-01",
+    end="2027-06-05",
+    status="draft",
+    approvals_required=None,
+    approval_round=0,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO missions(org_id, name, start_date, end_date, status, owner_id,"
+        " created_by_id, approval_round, approvals_required) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            org_id,
+            name,
+            start,
+            end,
+            status,
+            owner_id,
+            created_by_id or owner_id,
+            approval_round,
+            approvals_required,
+        ),
+    )
+    return cur.lastrowid
+
+
+def make_slot(conn, org_id, mission_id, name="Engineer", headcount=1, position=1) -> int:
+    cur = conn.execute(
+        "INSERT INTO slots(org_id, mission_id, name, headcount, position) VALUES (?, ?, ?, ?, ?)",
+        (org_id, mission_id, name, headcount, position),
+    )
+    return cur.lastrowid
+
+
+def make_assignment(
+    conn,
+    org_id,
+    mission_id,
+    slot_id,
+    crew_profile_id,
+    proposed_by_id,
+    status="proposed",
+    reason=None,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO assignments(org_id, mission_id, slot_id, crew_profile_id, proposed_by_id,"
+        " status, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (org_id, mission_id, slot_id, crew_profile_id, proposed_by_id, status, reason),
+    )
+    return cur.lastrowid

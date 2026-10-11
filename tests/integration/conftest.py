@@ -15,3 +15,12 @@ def conn(db_path):
     init_db(c)
     yield c
     c.close()
+
+
+@pytest.fixture
+def seeded_db(conn):
+    """A fresh database loaded with the PRD §9 seed."""
+    from mission_control.seed.loader import load_seed
+
+    load_seed(conn, password_hash="test-hash")
+    return conn
