@@ -15,7 +15,7 @@ class Approver:
 
 def approver_problems(
     approver: Approver,
-    created_by_id: int,
+    created_by_id: int | None,
     rostered_user_ids: Set[int],
     decided_this_round: Set[int],
 ) -> list[Problem]:

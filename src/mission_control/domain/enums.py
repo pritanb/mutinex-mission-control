@@ -17,3 +17,9 @@ class AssignmentStatus(StrEnum):
     REMOVED = "removed"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+
+
+class Role(StrEnum):
+    DIRECTOR = "director"
+    LEAD = "lead"
+    CREW = "crew"
