@@ -44,7 +44,7 @@ v1 succeeds when:
 
 ## 4. Main workflows (all available through the CLI)
 
-1. **Sign in** with email and password. See what needs attention: pending assignments, approvals waiting on me, my missions.
+1. **Sign in** with email and password, and change your own password. See what needs attention: pending assignments, approvals waiting on me, my missions.
 2. **Director admin:** manage users and roles, crew profiles, the skill catalogue, and the number of approvals required.
 3. **Lead or Director:** set crew skill levels (1–5).
 4. **Crew profile holder:** maintain personal details and unavailability.
@@ -79,20 +79,31 @@ v1 succeeds when:
 ### 5.3 People and skills
 
 - **P1** Each organisation has its own flat skill catalogue, managed by Directors. Skills with the same name in different organisations are unrelated.
+  - Directors can rename a skill. Its identity stays the same.
+  - Directors can delete a skill only if no crew skill or slot requirement uses it.
 - **P2** Proficiency is an integer from 1 to 5.
-- **P3** Leads and Directors set skill levels. **Nobody can change their own levels.**
-- **P4** Crew profile holders manage their own personal details and unavailability. Nobody else edits them.
+- **P3** Leads and Directors set and remove skill levels. **Nobody can change their own levels.**
+  - A skill change is allowed even if it makes someone ineligible for an assignment on a Draft or Pending mission. Eligibility is checked again at acceptance, submission and approval.
+  - A skill change that would make someone ineligible for their assignment on an Active mission is refused.
+- **P4** Crew profile holders manage their own personal details and unavailability. Nobody else edits them. Personal details are a display name and an optional bio.
 - **P5** Crew are available by default. Unavailability is a date range with a reason.
 - **P6** A crew member can't record unavailability that overlaps one of their accepted assignments.
-- **P7** Users are deactivated, never deleted. Deactivation is refused while the user has open assignments. Deactivated users can't sign in, aren't eligible for matching, and keep their history.
+- **P7** Users are deactivated, never deleted. Deactivated users can't sign in, aren't eligible for matching, and keep their history. Deactivation is refused while the user:
+  - has open assignments; or
+  - owns non-final missions. The same applies to changing a mission owner's role away from Lead. Their missions must be reassigned first.
 - **P8** An organisation must always have at least one active Director.
+- **P9** Crew profiles survive role changes and can't be deleted. Changing a user's role to Crew Member gives them a profile if they don't already have one.
+- **P10** Directors set a new user's initial password. Users change their own password by entering their current one. There's no email or password-recovery flow.
+  - Passwords must be at least 15 characters. Passphrases are welcome, and uppercase letters, numbers and symbols aren't required.
+  - Changing a password ends all of that user's sessions, including the one used to change it.
 
 ### 5.4 Missions and lifecycle
 
 - **M1** A mission has a name, a date range, one owning Lead and a separately recorded creator.
   - Leads create missions for themselves. Directors create them on behalf of a Lead.
-  - Only Mission Leads can own missions. Directors can reassign the owner.
-- **M2** A mission has one or more slots. Each slot has a name, a headcount of at least 1, and at least one required skill with a minimum level.
+  - Only Mission Leads can own missions.
+  - Directors can transfer ownership of a non-final mission to another active Lead in the same organisation. If the mission is Pending, it returns to Draft and its approvals are cleared.
+- **M2** A mission has one or more slots. Each slot has a name, a headcount of at least 1, and at least one required skill with a minimum level. Dates may be in the past, but the end date must be on or after the start date. The same rule applies to unavailability.
 - **M3** Only the owning Lead can edit a mission, propose or remove crew, apply matcher results, or submit.
 
 ```
@@ -106,18 +117,24 @@ v1 succeeds when:
 | Transition | Who | Conditions and effects |
 |---|---|---|
 | Draft → Pending Approval | Owning Lead | All of these must hold: every slot is full, every assignment is Accepted, every rostered crew member is still eligible, and there are at least N eligible approvers. Otherwise the submission is refused with a list of the problems. |
-| Pending → Active | The N-th distinct eligible approver | The roster is checked again at each approval. |
-| Pending → Draft | Eligible Director (reject) or system | A rejection needs a reason. Any change to dates, slots or roster, including a crew withdrawal, also sends the mission back to Draft. Approvals are cleared, and remaining accepted assignments stay accepted. |
+| Pending → Active | The N-th distinct eligible approver | The roster is checked again at each approval. If the check fails, the approval is refused and the mission stays Pending, unchanged. |
+| Pending → Draft | Eligible Director (reject) or system | A rejection needs a reason. Any change to dates, slots, roster or owner, including a crew withdrawal, also sends the mission back to Draft. Approvals are cleared, and remaining accepted assignments stay accepted. |
 | Active → Completed | Owning Lead or Director | Accepted assignments become Completed. |
 | Any non-final → Cancelled | Owning Lead or any Director | Reason required. Open assignments become Cancelled. |
 
 - **M4** Draft missions can have unfilled places and unanswered proposals.
 - **M5** Once a mission is Active, its dates, requirements and roster are frozen. Only completion or cancellation are allowed.
 - **M6** Dates never trigger transitions on their own. There is no scheduler.
+- **M7** An edit is refused if it would invalidate an open assignment. The response lists the affected crew, and the Lead must remove them first. Crew are never removed automatically. Edits that invalidate an assignment are:
+  - removing a slot that has open assignments;
+  - lowering a slot's headcount below its open assignments;
+  - changing dates or requirements so that an assigned person is no longer eligible.
 
 ### 5.5 Approval
 
 - **A1** Each organisation sets the number of approvals required (N ≥ 1). The approvals must come from N distinct eligible approvers.
+  - N is fixed for a mission when it's submitted. Later changes to the setting don't affect a round already in progress.
+  - An approval already given still counts if that Director is later deactivated or demoted.
 - **A2** Leads can't approve anything, which satisfies R3. **[B]** A Director can't approve a mission they created or are rostered on.
 - **A3** Each Director approves a round at most once. A single rejection ends the round.
 
@@ -130,7 +147,7 @@ Proposed ──accept──▶ Accepted ──withdraw (reason)──▶ Withdra
 Accepted ──mission completed──▶ Completed;  open ──mission cancelled──▶ Cancelled
 ```
 
-- **S1** The owning Lead can propose only eligible crew. A person can hold at most one open assignment per mission. A slot can't have more open assignments than its headcount.
+- **S1** The owning Lead can propose only eligible crew. A person can hold at most one open assignment per mission. A slot can't have more open assignments than its headcount. A Lead can propose themselves, but they must be eligible and must accept like anyone else.
 - **S2** Crew can accept only while the mission is in Draft and they're still eligible. Accepted assignments block overlapping dates. Proposals don't block anything.
 - **S3** Declining takes an optional reason. Withdrawing needs a reason and is allowed only in Draft or Pending Approval.
 - **S4** Every assignment needs the crew member's acceptance. Crew can't be placed on a mission directly.
@@ -147,10 +164,11 @@ Accepted ──mission completed──▶ Completed;  open ──mission cancell
 | Users, catalogue management, organisation settings | ✗ | read catalogue | manage |
 
 - **V1** Every state change, approval, rejection and assignment response is recorded with who did it, when, and any reason. Anyone who can see the mission can see this history.
+- **V2** Former assignees see a summary of the mission in their own assignment history. They don't get full access to the mission unless their role allows it. Former assignees are people whose assignment was declined, withdrawn, removed or cancelled.
 
 ## 6. Auto-matching
 
-The matcher only advises. It suggests crew for a Draft mission's open places and changes nothing. When the owning Lead applies the suggestion, it creates Proposed assignments, which crew still have to accept.
+The matcher only advises. It suggests crew for a Draft mission's open places and changes nothing. The owner or a Director can preview a suggestion. When the owning Lead applies it, it creates Proposed assignments, which crew still have to accept.
 
 **Candidates.** Active crew profiles in the mission's organisation only. Crew who already have an open assignment on this mission, or who declined or withdrew from it, are left out.
 
@@ -308,6 +326,7 @@ Every acceptance criterion maps to at least one automated test.
 
 - Web UI.
 - Self-service organisation signup, users in more than one organisation, SSO.
+- Password recovery and email flows. Deleting crew profiles.
 - Delivering notifications. The CLI's "needs attention" views replace them.
 - Certifications, skill expiry, skill verification, skill hierarchies.
 - Recurring availability, scheduling finer than a day, rest periods between missions.
