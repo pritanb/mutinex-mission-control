@@ -102,3 +102,68 @@ A read-only subagent reviewed M6–M8, and three fix agents with separate file o
 - **M15:** build the dummy hash at startup. Wire the `MC_DATABASE_PATH` and `MC_DB_BUSY_TIMEOUT_MS` settings.
 - **M17:** `mc-admin seed` hashes the demo passphrase (`orbital launch window`).
 - **Out of scope:** deleting expired session tokens.
+
+---
+
+## Phase 3: Services (SF, M9–M14), in progress
+
+`8ccb5c3` → … · 875 tests on `main` so far · use cases on top of the domain and repositories
+
+**Status:**
+- Merged: SF, M10, M9.
+- M11 is built and under independent review.
+- M14 preview is being built.
+- M12 and M13 haven't started.
+- This section is updated as each module lands.
+
+**Headline so far:** Phase 3 is the first phase built in parallel. The plan's rules held for every merged module. The changes are in *how* we work (waves, worktrees, review on `main`), plus a few shared pieces the services turned out to need.
+
+### Where we diverged
+
+| Change | Why |
+|---|---|
+| **A service foundation (SF) module was added** before the services | Without it, every service would have written its own context, error types and fact loaders. SF made them shared and reviewed once. |
+| **Waves in git worktrees** instead of strictly one module at a time | Independent modules (M9 ∥ M10 ∥ M11) can be built in parallel and still reviewed one branch at a time |
+| **Repositories split into one file per area** | Each wave module owns its own repository file, so parallel branches rarely conflict |
+| **Review happens on `main` as staged changes** before the commit | Easier to read line by line in the IDE than a diff against a worktree branch |
+| **One shared 422 error (`InvalidInput`)** | Two agents invented their own. Plain `ValueError` also signals programming errors, so the API can't map it safely. |
+| **`StateConflict` is a `RuleViolation`** | Services and the API handle one family of 409 refusals |
+| **New problem code `already_exists`**; **TR-13**: emails are unique across the platform | Duplicate email, skill name or crew profile. The trade-off: a duplicate-email refusal reveals that the address is in use elsewhere. |
+| **M14 split:** preview now, apply after M12 | Apply needs M12's propose path. Preview needs only what's merged. |
+
+### Key decisions
+
+- **Privacy:** unavailability reasons never go into the audit log. Only dates do.
+- **No-op updates write nothing.** An update with no fields still checks access, but makes no write and no audit entry.
+- **Reactivating users is out of scope.** Three M9 choices are logged in `docs/backlog.md` for later.
+- **A `cli-ux` skill was created** from Atlassian's CLI principles and "How Terminals Work". It's used to shape matcher output and the CLI mock sessions (`docs/cli-ux.md`).
+
+### Process notes
+
+- **The M11 agent stopped before its hand-off.** Its work was complete and passing, but the real run, review and test-first evidence were missing. The lead did the real run, and a fresh agent did an independent review.
+- **Another session committed on a wave branch.** A review commit appeared on `m9-admin`. Its contents were verified to be already on `main` before the branch was deleted.
+- **Lint scope widened.** Ruff now excludes `.claude/` as well as `docs/`, because it formats code blocks inside Markdown.
+
+### Modules
+
+| Module | Status | Notes |
+|---|---|---|
+| SF service foundation | ✓ `8ccb5c3` | Context, errors, fact loaders, Wave 1 writes. Before/after snapshot identical for the split. |
+| M10 crew | ✓ `d55a7ed` | Reasons hidden from Leads; Active assignments protected from skill changes |
+| M9 admin | ✓ `b6bad6d` | Last Director, owned missions and open assignments block demotion and deactivation; sessions revoked |
+| M11 missions | in review | *To complete:* review findings, decisions, merge commit |
+| M12 assignments | not started | |
+| M13 approvals | not started | |
+| M14 matching | preview in progress | *To complete:* apply after M12 |
+
+### Phase-end review
+
+*To complete after M14:* a read-only subagent reviews SF and M9–M14, then the findings and what happened to each.
+
+### Carried forward
+
+*To complete at phase end.* Candidates so far:
+- **M15:**
+  - map `InvalidInput`, `InvalidDateRange` and `PasswordTooShort` to 422, and never plain `ValueError`;
+  - single-reason refusals repeat their message in `problems`, so the CLI shouldn't print it twice.
+- **M16:** render matcher previews per `docs/cli-ux.md`.
