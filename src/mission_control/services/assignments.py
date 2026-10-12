@@ -93,20 +93,31 @@ def propose(ctx: ServiceContext, mission_id: int, slot_id: int, crew_profile_id:
         # reveals whether a crew id exists.
         profile = found(repos.crew.get(crew_profile_id), _CREW_MEMBER)
         ctx.authorize_view(Action.VIEW_CREW, _about(profile), _CREW_MEMBER)
+        return make_proposal(ctx, repos, mission, slots, slot, profile)
 
-        problems = [
-            *_already_on_mission(repos, mission, slots, profile),
-            *_slot_full(mission, slot),
-            *_ineligibility(repos, mission, slot, profile),
-        ]
-        check(
-            problems, f"{profile.display_name} can't be proposed as {slot.name} on {mission.name}"
-        )
 
-        made = repos.assignments.create(mission.id, slot.id, profile.id, ctx.actor.user_id)
-        _audit(ctx, Event.ASSIGNMENT_PROPOSED, made, None, A.PROPOSED, mission, slot, profile)
-        _after_roster_change(ctx, repos, mission, Action.PROPOSE_CREW)
-        return made
+def make_proposal(
+    ctx: ServiceContext,
+    repos: Repos,
+    mission: Mission,
+    slots: Mapping[int, SlotSpec],
+    slot: SlotSpec,
+    profile: CrewProfile,
+) -> Assignment:
+    """The checks and writes every proposal goes through, by hand or from the matcher. Call it
+    inside `ctx.write()` once the caller has authorized the owner and checked the mission's
+    state. `slots` are the mission's live slots with their current open places."""
+    problems = [
+        *_already_on_mission(repos, mission, slots, profile),
+        *_slot_full(mission, slot),
+        *_ineligibility(repos, mission, slot, profile),
+    ]
+    check(problems, f"{profile.display_name} can't be proposed as {slot.name} on {mission.name}")
+
+    made = repos.assignments.create(mission.id, slot.id, profile.id, ctx.actor.user_id)
+    _audit(ctx, Event.ASSIGNMENT_PROPOSED, made, None, A.PROPOSED, mission, slot, profile)
+    _after_roster_change(ctx, repos, mission, Action.PROPOSE_CREW)
+    return made
 
 
 # The crew member answers

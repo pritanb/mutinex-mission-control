@@ -1,5 +1,6 @@
-"""M14: the matching service, preview only. Suggests crew for a Draft mission's open places and
-writes nothing (PRD §6, AC-18 to AC-22, AC-31, S2, S3, S3b; design §6).
+"""M14: the matching service. Preview suggests crew for a Draft mission's open places and writes
+nothing; apply turns the suggestion into proposals (PRD §6, AC-7, AC-18 to AC-22, AC-31, S1, S2,
+S3, S3b; design §6).
 
 Seed ids (PRD §9): a crew profile's id equals its user's id. Ruth 1 · Lee 4 · Nora 5 · Ana 6 ·
 Ben 7 · Chen 8 · Dana 9 · Eli 10 · Fay 11 · Gus 12 · Hana 13 · Sam 14 (Helix) · Kai 16 (Helix).
@@ -377,3 +378,117 @@ def test_preview_records_are_frozen(seeded_db):
         preview.mission_name = "Other"  # type: ignore[misc]
     assert isinstance(preview.slots, tuple)
     assert all(isinstance(s.suggested, tuple) for s in preview.slots)
+
+
+# --- Apply (AC-7, AC-22, S1, S3b; design §6) ----------------------------------------------
+
+
+def proposals(conn, mission_id):
+    """[(slot id, crew profile id, status)] on the mission, in id order."""
+    rows = conn.execute(
+        "SELECT slot_id, crew_profile_id, status FROM assignments WHERE mission_id = ? ORDER BY id",
+        (mission_id,),
+    )
+    return [tuple(r) for r in rows]
+
+
+def test_ac22_s1_applying_creates_proposed_assignments_for_the_suggestion(seeded_db):
+    made = matching.apply(as_(seeded_db, LEE), GATEWAY)
+
+    assert [(a.slot_id, a.crew_profile_id, a.status.value) for a in made] == [
+        (COMMANDER, ANA_ID, "proposed"),
+        (FLIGHT_ENGINEER, CHEN_ID, "proposed"),
+        (SPECIALIST, DANA_ID, "proposed"),
+    ]
+    assert proposals(seeded_db, GATEWAY) == [
+        (COMMANDER, ANA_ID, "proposed"),
+        (FLIGHT_ENGINEER, CHEN_ID, "proposed"),
+        (SPECIALIST, DANA_ID, "proposed"),
+    ]
+    events = seeded_db.execute(
+        "SELECT actor_id, event FROM audit_events"
+        " WHERE mission_id = ? AND event LIKE 'assignment.%'",
+        (GATEWAY,),
+    )
+    assert [tuple(e) for e in events] == [(4, "assignment.proposed")] * 3
+    status = seeded_db.execute("SELECT status FROM missions WHERE id = ?", (GATEWAY,)).fetchone()
+    assert status[0] == "draft"
+
+
+def test_applying_again_with_every_place_taken_proposes_nobody(seeded_db):
+    matching.apply(as_(seeded_db, LEE), GATEWAY)
+    before = snapshot(seeded_db)
+    assert matching.apply(as_(seeded_db, LEE), GATEWAY) == []
+    assert snapshot(seeded_db) == before
+
+
+def test_s3_applying_leaves_an_unfilled_place_empty(seeded_db):
+    made = matching.apply(as_(seeded_db, NORA), ASTEROID)
+    assert [(a.slot_id, a.crew_profile_id) for a in made] == [(PILOT, ANA_ID)]
+
+
+def test_s3b_apply_recomputes_from_current_data(seeded_db):
+    accept(seeded_db, GATEWAY, COMMANDER, ANA_ID)  # Ana now overlaps Asteroid Survey
+    made = matching.apply(as_(seeded_db, NORA), ASTEROID)
+    assert [(a.slot_id, a.crew_profile_id) for a in made] == [(PILOT, ELI_ID)]
+
+
+def test_someone_who_declined_is_not_proposed_again(seeded_db):
+    matching.apply(as_(seeded_db, LEE), GATEWAY)
+    dana = seeded_db.execute(
+        "SELECT id FROM assignments WHERE mission_id = ? AND crew_profile_id = ?",
+        (GATEWAY, DANA_ID),
+    ).fetchone()[0]
+    seeded_db.execute("UPDATE assignments SET status = 'declined' WHERE id = ?", (dana,))
+
+    made = matching.apply(as_(seeded_db, LEE), GATEWAY)
+
+    assert [(a.slot_id, a.crew_profile_id) for a in made] == [(SPECIALIST, ELI_ID)]
+
+
+@pytest.mark.parametrize(
+    ("actor", "code"),
+    [(RUTH, "role_forbidden"), (NORA, "not_owner"), (ANA, "not_owner")],
+    ids=["director", "other_lead", "lead_on_crew"],
+)
+def test_ac7_only_the_owner_can_apply(seeded_db, actor, code):
+    before = snapshot(seeded_db)
+    with pytest.raises(Forbidden) as caught:
+        matching.apply(as_(seeded_db, actor), GATEWAY)
+    assert caught.value.code == code
+    assert snapshot(seeded_db) == before
+
+
+@pytest.mark.parametrize(
+    ("actor", "mission_id", "code", "message"),
+    [
+        (LEE, TELESCOPE, "mission_frozen", "Can't apply suggested crew to an active mission"),
+        (
+            NORA,
+            COMMS,
+            "invalid_transition",
+            "Can't apply suggested crew to a mission pending approval",
+        ),
+        (LEE, MARS, "mission_final", "Can't apply suggested crew to a mission that's completed"),
+    ],
+)
+def test_apply_is_refused_for_a_mission_that_is_not_draft(
+    seeded_db, actor, mission_id, code, message
+):
+    before = snapshot(seeded_db)
+    with pytest.raises(StateConflict) as caught:
+        matching.apply(as_(seeded_db, actor), mission_id)
+    assert (caught.value.code, caught.value.message) == (code, message)
+    assert snapshot(seeded_db) == before
+
+
+def test_ac29_ac31_applying_to_another_organisations_mission_is_not_found(seeded_db):
+    before = snapshot(seeded_db)
+    with pytest.raises(NotFound):
+        matching.apply(as_(seeded_db, SAM), GATEWAY)
+    assert snapshot(seeded_db) == before
+
+
+def test_ac31_kai_is_never_proposed_for_an_aurora_mission(seeded_db):
+    made = matching.apply(as_(seeded_db, NORA), ASTEROID)
+    assert KAI_ID not in {a.crew_profile_id for a in made}

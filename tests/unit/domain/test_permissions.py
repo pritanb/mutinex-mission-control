@@ -263,3 +263,22 @@ def test_permission_tables_are_read_only():
         ROLES[Action.MANAGE_ORG] = frozenset()  # type: ignore[index]
     with pytest.raises(TypeError):
         ROLE_PHRASE[Action.MANAGE_ORG] = "x"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("role", "action", "context", "message"),
+    [
+        (C, Action.PREVIEW_MATCH, OWNER, "Crew can't see suggested crew"),
+        (D, Action.APPLY_MATCH, OWNER, "Directors can't apply suggested crew"),
+        (
+            L,
+            Action.APPLY_MATCH,
+            NOT_OWNER,
+            "Only the mission's owner can apply suggested crew to this mission",
+        ),
+    ],
+)
+def test_matcher_refusals_talk_about_suggested_crew(role, action, context, message):
+    with pytest.raises(Forbidden) as caught:
+        authorize(Actor(ME, 1, role, ME), action, context)
+    assert caught.value.message == message

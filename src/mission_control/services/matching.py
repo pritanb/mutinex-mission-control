@@ -1,7 +1,10 @@
-"""Matching: suggest crew for a draft mission's open places. Advisory only, so a preview writes
-nothing.
+"""Matching: suggest crew for a draft mission's open places, and turn a suggestion into
+proposals. A preview writes nothing; applying creates Proposed assignments, which crew still have
+to accept.
 
-The owner or a Director may preview; only the owner may apply. Candidates are the
+The owner or a Director may preview; only the owner may apply. Applying works the suggestion out
+again inside its own write transaction, so it's never stale, and each proposal goes through the
+same checks as one made by hand. Candidates are the
 organisation's crew, minus anyone holding an open assignment on the mission and anyone who
 declined, withdrew or was removed from it. The suggestion carries each person's workload and
 proficiency, which are what decided the pick.
@@ -12,10 +15,18 @@ from dataclasses import dataclass
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import Action, AssignmentStatus
 from mission_control.domain.lifecycle import StateConflict, state_problem
-from mission_control.domain.matching import proficiency, suggest_roster
-from mission_control.domain.permissions import can
+from mission_control.domain.matching import Suggestion, proficiency, suggest_roster
+from mission_control.domain.permissions import Context, can
 from mission_control.domain.records import CandidateFacts, SlotSpec
-from mission_control.services.context import ServiceContext, mission_context, visible_mission
+from mission_control.infra.repositories import Repos
+from mission_control.infra.repositories.models import Assignment, Mission
+from mission_control.services.assignments import make_proposal
+from mission_control.services.context import (
+    ServiceContext,
+    found,
+    mission_context,
+    visible_mission,
+)
 
 # Anyone holding one of these on the mission is never suggested for it again.
 _LEFT_OUT = (
@@ -67,21 +78,9 @@ class MatchPreview:
 def preview(ctx: ServiceContext, mission_id: int) -> MatchPreview:
     """The suggested crew for a draft mission's open places. Changes nothing."""
     with ctx.read() as repos:
-        mission = visible_mission(ctx, repos, mission_id)
-        about = mission_context(repos, mission)
-        ctx.authorize(Action.PREVIEW_MATCH, about)
-        if problem := state_problem(mission.status, Action.PREVIEW_MATCH):
-            raise StateConflict(problem)
+        mission, about = _open(ctx, repos, mission_id, Action.PREVIEW_MATCH)
+        slots, candidates, suggestion = _suggest(repos, mission)
 
-        left_out = {a.crew_profile_id for a in repos.missions.assignments(mission.id, _LEFT_OUT)}
-        candidates = [
-            c
-            for c in repos.facts.candidates(excluding_mission_id=mission.id)
-            if c.crew_profile_id not in left_out
-        ]
-        slots = repos.facts.slot_specs(mission.id)
-
-    suggestion = suggest_roster(slots, candidates, mission.window)
     by_id = {c.crew_profile_id: c for c in candidates}
     chosen: dict[int, list[SuggestedCrew]] = {s.id: [] for s in slots}
     specs = {s.id: s for s in slots}
@@ -116,3 +115,46 @@ def _suggested(person: CandidateFacts, slot: SlotSpec, pick: int) -> SuggestedCr
         proficiency=proficiency(person, slot),
         pick=pick,
     )
+
+
+def apply(ctx: ServiceContext, mission_id: int) -> list[Assignment]:
+    """Propose the suggested crew for a draft mission's open places, in pick order. Only the
+    owner may. Places with no candidate stay empty; with nothing to suggest, nothing changes."""
+    with ctx.write() as repos:
+        mission, _ = _open(ctx, repos, mission_id, Action.APPLY_MATCH)
+        _, _, suggestion = _suggest(repos, mission)
+        made = []
+        for placement in suggestion.placements:
+            # Fresh slots each time, so a proposal sees the places the previous ones took.
+            slots = {s.id: s for s in repos.facts.slot_specs(mission.id)}
+            profile = found(repos.crew.get(placement.crew_profile_id), "Crew member")
+            made.append(
+                make_proposal(ctx, repos, mission, slots, slots[placement.slot_id], profile)
+            )
+        return made
+
+
+def _open(
+    ctx: ServiceContext, repos: Repos, mission_id: int, action: Action
+) -> tuple[Mission, Context]:
+    """Find the mission, check the actor may preview or apply, then that it's a draft."""
+    mission = visible_mission(ctx, repos, mission_id)
+    about = mission_context(repos, mission)
+    ctx.authorize(action, about)
+    if problem := state_problem(mission.status, action):
+        raise StateConflict(problem)
+    return mission, about
+
+
+def _suggest(
+    repos: Repos, mission: Mission
+) -> tuple[list[SlotSpec], list[CandidateFacts], Suggestion]:
+    """The mission's slots, the candidates for it, and the matcher's suggestion from them."""
+    left_out = {a.crew_profile_id for a in repos.missions.assignments(mission.id, _LEFT_OUT)}
+    candidates = [
+        c
+        for c in repos.facts.candidates(excluding_mission_id=mission.id)
+        if c.crew_profile_id not in left_out
+    ]
+    slots = repos.facts.slot_specs(mission.id)
+    return slots, candidates, suggest_roster(slots, candidates, mission.window)

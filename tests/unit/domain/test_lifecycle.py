@@ -34,6 +34,7 @@ MISSION_ACTIONS = [
     Action.CANCEL,
     Action.EDIT_MISSION,
     Action.PREVIEW_MATCH,
+    Action.APPLY_MATCH,
 ]
 ASSIGNMENT_ACTIONS = [
     Action.PROPOSE_CREW,
@@ -52,6 +53,7 @@ ALLOWED = {
     Action.CANCEL: {M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE},
     Action.EDIT_MISSION: {M.DRAFT, M.PENDING_APPROVAL},
     Action.PREVIEW_MATCH: {M.DRAFT},  # the matcher suggests crew for draft missions only
+    Action.APPLY_MATCH: {M.DRAFT},
 }
 
 
@@ -162,6 +164,10 @@ def test_touch_for_change_refuses_a_finished_mission_as_final(status, message):
 
 def test_previewing_a_match_leaves_a_draft_mission_in_draft():
     assert mission_status_after(M.DRAFT, Action.PREVIEW_MATCH) == M.DRAFT
+
+
+def test_applying_a_match_leaves_a_draft_mission_in_draft():
+    assert mission_status_after(M.DRAFT, Action.APPLY_MATCH) == M.DRAFT
 
 
 def test_complete_and_cancel_reach_final_states():
@@ -325,6 +331,7 @@ def test_ac12_too_few_eligible_approvers_blocks_submission():
             "Can't suggest crew for a mission pending approval",
         ),
         (M.CANCELLED, Action.PREVIEW_MATCH, "Can't suggest crew for a mission that's cancelled"),
+        (M.ACTIVE, Action.APPLY_MATCH, "Can't apply suggested crew to an active mission"),
     ],
 )
 def test_mission_refusal_wording(status, action, message):

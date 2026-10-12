@@ -48,6 +48,14 @@ class MissionRepo(MissionSlots, MissionCrew):
         )
         return [_mission(r) for r in rows]
 
+    def with_status(self, status: MissionStatus) -> list[Mission]:
+        """The organisation's missions in one status, soonest first."""
+        rows = self._all(
+            f"SELECT * FROM missions WHERE org_id = :org AND status = :status {_ORDER}",
+            status=status,
+        )
+        return [_mission(r) for r in rows]
+
     # Visibility
 
     def list_visible(self, actor: Actor) -> list[Mission]:

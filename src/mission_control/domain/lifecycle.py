@@ -15,8 +15,9 @@ A = AssignmentStatus
 FINAL = frozenset({M.COMPLETED, M.CANCELLED})
 
 
-# The states each mission action may start from. Its keys are the mission actions. Previewing a
-# match is listed so its refusals share these codes, though it never changes the status.
+# The states each mission action may start from. Its keys are the mission actions. Previewing and
+# applying a match are listed so their refusals share these codes, though neither changes the
+# mission's status.
 MISSION_ALLOWED_FROM: Mapping[Action, frozenset[MissionStatus]] = MappingProxyType(
     {
         Action.SUBMIT: frozenset({M.DRAFT}),
@@ -27,6 +28,7 @@ MISSION_ALLOWED_FROM: Mapping[Action, frozenset[MissionStatus]] = MappingProxyTy
         Action.CANCEL: frozenset({M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE}),
         Action.EDIT_MISSION: frozenset({M.DRAFT, M.PENDING_APPROVAL}),
         Action.PREVIEW_MATCH: frozenset({M.DRAFT}),
+        Action.APPLY_MATCH: frozenset({M.DRAFT}),
     }
 )
 
@@ -41,6 +43,7 @@ _MISSION_VERB: Mapping[Action, str] = MappingProxyType(
         Action.CANCEL: "cancel",
         Action.EDIT_MISSION: "edit",
         Action.PREVIEW_MATCH: "suggest crew for",
+        Action.APPLY_MATCH: "apply suggested crew to",
     }
 )
 
@@ -104,8 +107,8 @@ def state_problem(status: MissionStatus, action: Action) -> Problem | None:
 def mission_status_after(
     status: MissionStatus, action: Action, *, reaches_quorum: bool = False
 ) -> MissionStatus:
-    """The mission's status once `action` succeeds. Check `state_problem` first. Previewing a
-    match changes nothing, so the status stays as it is."""
+    """The mission's status once `action` succeeds. Check `state_problem` first. Previewing or
+    applying a match leaves the status as it is."""
     if state_problem(status, action) is not None:
         raise ValueError(f"{_MISSION_VERB[action]} is not allowed from {status.value}")
     match action:
@@ -121,7 +124,7 @@ def mission_status_after(
             return M.CANCELLED
         case Action.EDIT_MISSION | Action.TRANSFER:
             return _after_change(status)
-        case Action.PREVIEW_MATCH:
+        case Action.PREVIEW_MATCH | Action.APPLY_MATCH:
             return status
 
 
