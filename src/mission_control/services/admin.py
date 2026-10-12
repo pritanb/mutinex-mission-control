@@ -6,7 +6,7 @@ transaction, so the checks see the same data the write changes. Audit `data` kee
 that applied at the time.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from enum import Enum
 
 from mission_control.domain.enums import Action, Role
@@ -22,7 +22,7 @@ from mission_control.infra.repositories.models import (
     Skill,
     User,
 )
-from mission_control.services.context import ServiceContext, found
+from mission_control.services.context import ServiceContext, check, found
 
 
 class _Keep(Enum):
@@ -134,7 +134,7 @@ def change_role(ctx: ServiceContext, user_id: int, role: Role) -> User:
             problems += _owns_open_missions(repos, user)
         if user.role == Role.DIRECTOR:
             problems += _last_director(repos, user)
-        _refuse(problems, f"{user.name}'s role can't be changed")
+        check(problems, f"{user.name}'s role can't be changed")
 
         repos.users.set_role(user.id, role)
         ctx.audit(
@@ -167,7 +167,7 @@ def deactivate_user(ctx: ServiceContext, user_id: int) -> User:
         problems += _owns_open_missions(repos, user)
         if user.role == Role.DIRECTOR:
             problems += _last_director(repos, user)
-        _refuse(problems, f"{user.name} can't be deactivated")
+        check(problems, f"{user.name} can't be deactivated")
 
         repos.users.set_active(user.id, False)
         security.revoke_user_tokens(ctx.conn, user.id, ctx.now)
@@ -335,14 +335,6 @@ def _name_taken(existing: Skill) -> RuleViolation:
 
 
 # --- Helpers ------------------------------------------------------------------------------
-
-
-def _refuse(problems: Sequence[Problem], message: str) -> None:
-    """A single reason is raised under its own code; several are listed together."""
-    if len(problems) == 1:
-        raise RuleViolation.of(problems[0])
-    if problems:
-        raise RuleViolation(message, problems)
 
 
 def _required(value: str, what: str) -> str:

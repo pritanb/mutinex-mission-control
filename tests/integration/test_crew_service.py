@@ -299,8 +299,8 @@ def test_p6_unavailability_over_an_accepted_assignment_is_refused(seeded_db):
         crew.add_unavailability(
             as_(seeded_db, BEN), 7, date(2027, 4, 20), date(2027, 4, 25), "Holiday"
         )
-    assert err.value.code == "overlap"
-    assert err.value.message == (
+    assert [p.code for p in err.value.problems][:1] == ["overlap"]
+    assert err.value.problems[0].message == (
         "Ben has an accepted assignment on Deep Space Comms Upgrade overlapping "
         "2027-04-20 to 2027-04-20"
     )
@@ -319,7 +319,8 @@ def test_ac16_hana_cant_be_unavailable_during_the_active_telescope_mission(seede
         crew.add_unavailability(
             as_(seeded_db, HANA), 13, date(2027, 1, 1), date(2027, 1, 10), "Leave"
         )
-    assert "Orbital Telescope Service" in err.value.message
+    assert err.value.message == "Hana has accepted assignments overlapping those dates"
+    assert "Orbital Telescope Service" in err.value.problems[0].message
 
 
 def test_ac16_every_overlapping_assignment_is_listed(seeded_db):
@@ -329,7 +330,7 @@ def test_ac16_every_overlapping_assignment_is_listed(seeded_db):
         crew.add_unavailability(
             as_(seeded_db, crew_actor(8)), 8, date(2027, 1, 1), date(2027, 3, 31), "Sabbatical"
         )
-    assert err.value.code == "overlap"
+    assert [p.code for p in err.value.problems][:1] == ["overlap"]
     assert [p.refs["mission_name"] for p in err.value.problems] == [
         "Orbital Telescope Service",
         "Station Reboost",
@@ -475,8 +476,8 @@ def test_p3_skill_change_breaking_an_active_assignment_is_refused(seeded_db):
     before = snapshot(seeded_db)
     with pytest.raises(RuleViolation) as err:
         crew.set_skill_level(as_(seeded_db, LEE), 13, EVA, 2)  # Hana, Telescope needs EVA 3
-    assert err.value.code == "invalidates_active_assignment"
-    assert err.value.message == (
+    assert [p.code for p in err.value.problems][:1] == ["invalidates_active_assignment"]
+    assert err.value.problems[0].message == (
         "Hana needs EVA 3 as EVA Specialist on active mission Orbital Telescope Service"
     )
     assert [dict(p.refs) for p in err.value.problems] == [{"mission_id": 5, "skill_id": EVA}]
@@ -487,7 +488,7 @@ def test_p3_removing_a_skill_an_active_assignment_needs_is_refused(seeded_db):
     before = snapshot(seeded_db)
     with pytest.raises(RuleViolation) as err:
         crew.remove_skill_level(as_(seeded_db, RUTH), 13, EVA)
-    assert err.value.code == "invalidates_active_assignment"
+    assert [p.code for p in err.value.problems][:1] == ["invalidates_active_assignment"]
     assert unchanged(seeded_db, before)
 
 

@@ -399,8 +399,8 @@ def test_p7_a_lead_who_owns_unfinished_missions_cant_change_role(seeded_db, to_r
     with pytest.raises(RuleViolation) as err:
         admin.change_role(ctx(seeded_db), NORA, to_role)
     code, message, problems = refused(err)
-    assert (code, problems) == ("owns_open_missions", ["owns_open_missions"])
-    assert message == (
+    assert (code, problems) == ("rule_violation", ["owns_open_missions"])
+    assert err.value.problems[0].message == (
         "Nora Quinn still owns Station Reboost, Asteroid Survey, Lunar Surface Medical Study"
         " and Deep Space Comms Upgrade; reassign them to another Lead first"
     )
@@ -421,7 +421,7 @@ def test_p7_a_lead_whose_missions_are_all_finished_can_change_role(seeded_db):
 def test_p7_the_refusal_names_a_single_mission_in_the_singular(seeded_db):
     with pytest.raises(RuleViolation) as err:
         admin.change_role(ctx(seeded_db), LEE_ID, Role.CREW)
-    assert err.value.message == (
+    assert err.value.problems[0].message == (
         "Lee Park still owns Orbital Telescope Service and Lunar Gateway Resupply;"
         " reassign them to another Lead first"
     )
@@ -429,7 +429,10 @@ def test_p7_the_refusal_names_a_single_mission_in_the_singular(seeded_db):
     make_mission(seeded_db, 1, lead, name="Only One")
     with pytest.raises(RuleViolation) as err:
         admin.change_role(ctx(seeded_db), lead, Role.CREW)
-    assert err.value.message == "Solo Lead still owns Only One; reassign it to another Lead first"
+    assert err.value.message == "Solo Lead's role can't be changed"
+    assert err.value.problems[0].message == (
+        "Solo Lead still owns Only One; reassign it to another Lead first"
+    )
 
 
 def test_p8_the_last_active_director_cant_be_demoted(seeded_db):
@@ -438,8 +441,8 @@ def test_p8_the_last_active_director_cant_be_demoted(seeded_db):
         with pytest.raises(RuleViolation) as err:
             admin.change_role(ctx(seeded_db, SAM), SAM.user_id, role)
         code, message, problems = refused(err)
-        assert (code, problems) == ("last_director", ["last_director"])
-        assert message == (
+        assert (code, problems) == ("rule_violation", ["last_director"])
+        assert err.value.problems[0].message == (
             "Sam Rivera is the only active Director, and the organisation must always have one;"
             " make someone else a Director first"
         )
@@ -451,7 +454,7 @@ def test_p8_deactivated_directors_dont_count_towards_keeping_one(seeded_db):
     make_user(seeded_db, 2, "Former Director", role="director", is_active=False)
     with pytest.raises(RuleViolation) as err:
         admin.change_role(ctx(seeded_db, SAM), SAM.user_id, Role.LEAD)
-    assert err.value.code == "last_director"
+    assert [p.code for p in err.value.problems][:1] == ["last_director"]
 
 
 def test_p8_a_director_can_be_demoted_while_another_remains(seeded_db):
@@ -460,7 +463,7 @@ def test_p8_a_director_can_be_demoted_while_another_remains(seeded_db):
     # Marco is now the only active Director.
     with pytest.raises(RuleViolation) as err:
         admin.change_role(ctx(seeded_db, Actor(MARCO, 1, Role.DIRECTOR, MARCO)), MARCO, Role.LEAD)
-    assert err.value.code == "last_director"
+    assert [p.code for p in err.value.problems][:1] == ["last_director"]
 
 
 def test_p8_a_deactivated_director_can_change_role_without_affecting_the_count(seeded_db):
@@ -495,8 +498,8 @@ def test_ac26_deactivating_someone_with_open_assignments_is_refused(seeded_db):
     with pytest.raises(RuleViolation) as err:
         admin.deactivate_user(ctx(seeded_db), BEN_ID)
     code, message, problems = refused(err)
-    assert (code, problems) == ("has_open_assignments", ["has_open_assignments"])
-    assert message == (
+    assert (code, problems) == ("rule_violation", ["has_open_assignments"])
+    assert err.value.problems[0].message == (
         "Ben Ito has an open assignment on Deep Space Comms Upgrade;"
         " they must withdraw or be removed first"
     )
@@ -512,8 +515,8 @@ def test_ac26_proposals_count_as_open_assignments_and_every_mission_is_named(see
         make_assignment(seeded_db, 1, mission, slot, FAY, proposer, status="proposed")
     with pytest.raises(RuleViolation) as err:
         admin.deactivate_user(ctx(seeded_db), FAY)
-    assert err.value.code == "has_open_assignments"
-    assert err.value.message == (
+    assert [p.code for p in err.value.problems][:1] == ["has_open_assignments"]
+    assert err.value.problems[0].message == (
         "Fay Moreau has open assignments on Lunar Gateway Resupply and Asteroid Survey;"
         " they must withdraw or be removed first"
     )
@@ -524,7 +527,7 @@ def test_ac26_finished_assignments_dont_block_deactivation(seeded_db):
     # Chen's Mars Analog assignment is Completed; only his open Telescope one blocks.
     with pytest.raises(RuleViolation) as err:
         admin.deactivate_user(ctx(seeded_db), CHEN)
-    assert err.value.message == (
+    assert err.value.problems[0].message == (
         "Chen Wu has an open assignment on Orbital Telescope Service;"
         " they must withdraw or be removed first"
     )
@@ -534,8 +537,8 @@ def test_p7_deactivating_a_lead_who_owns_unfinished_missions_is_refused(seeded_d
     with pytest.raises(RuleViolation) as err:
         admin.deactivate_user(ctx(seeded_db), LEE_ID)
     code, message, problems = refused(err)
-    assert (code, problems) == ("owns_open_missions", ["owns_open_missions"])
-    assert message == (
+    assert (code, problems) == ("rule_violation", ["owns_open_missions"])
+    assert err.value.problems[0].message == (
         "Lee Park still owns Orbital Telescope Service and Lunar Gateway Resupply;"
         " reassign them to another Lead first"
     )
@@ -568,8 +571,8 @@ def test_ac26_the_last_active_director_cant_be_deactivated(seeded_db):
     with pytest.raises(RuleViolation) as err:
         admin.deactivate_user(ctx(seeded_db, SAM), SAM.user_id)
     code, message, problems = refused(err)
-    assert (code, problems) == ("last_director", ["last_director"])
-    assert message == (
+    assert (code, problems) == ("rule_violation", ["last_director"])
+    assert err.value.problems[0].message == (
         "Sam Rivera is the only active Director, and the organisation must always have one;"
         " make someone else a Director first"
     )
@@ -769,8 +772,8 @@ def test_p1_a_skill_in_use_cant_be_deleted_and_the_refusal_names_who_uses_it(see
     with pytest.raises(RuleViolation) as err:
         admin.delete_skill(ctx(seeded_db), GEOLOGY)
     code, message, problems = refused(err)
-    assert (code, problems) == ("skill_in_use", ["skill_in_use"])
-    assert message == (
+    assert (code, problems) == ("rule_violation", ["skill_in_use"])
+    assert err.value.problems[0].message == (
         "Geology can't be deleted because Hana Sato has it and Asteroid Survey (Geologist)"
         " requires it"
     )

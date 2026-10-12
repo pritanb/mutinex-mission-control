@@ -8,13 +8,13 @@ Who sees what:
   the person themselves.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 
 from mission_control.domain.dates import DateRange
 from mission_control.domain.eligibility import invalidated_by_skill_change
-from mission_control.domain.errors import InvalidInput, Problem, RuleViolation
+from mission_control.domain.errors import InvalidInput, Problem
 from mission_control.domain.events import Event
 from mission_control.domain.permissions import Action, Context, can
 from mission_control.domain.records import MAX_LEVEL, MIN_LEVEL
@@ -25,7 +25,7 @@ from mission_control.infra.repositories.models import (
     Unavailability,
     User,
 )
-from mission_control.services.context import ServiceContext, found
+from mission_control.services.context import ServiceContext, check, found
 
 _CREW_MEMBER = "Crew member"
 
@@ -144,9 +144,8 @@ def add_unavailability(
             for c in repos.facts.commitments(profile.id)
             if c.window.overlaps(window)
         ]
-        _refuse(
+        check(
             clashes,
-            "overlap",
             f"{profile.display_name} has accepted assignments overlapping those dates",
         )
         added = repos.crew.add_unavailability(profile.id, window, reason)
@@ -261,21 +260,11 @@ def _refuse_if_active_assignment_breaks(
     broken = invalidated_by_skill_change(
         profile.display_name, skill_id, level, repos.facts.active_assignments(profile.id)
     )
-    _refuse(
+    check(
         broken,
-        "invalidates_active_assignment",
         f"Changing {profile.display_name}'s {skill_name} level would break their assignments "
         f"on active missions",
     )
-
-
-def _refuse(problems: Sequence[Problem], code: str, several: str) -> None:
-    """Raise a RuleViolation if there are problems: a single one gives its own code and message;
-    several share `code` and the summary `several`."""
-    if len(problems) == 1:
-        raise RuleViolation.of(problems[0])
-    if problems:
-        raise RuleViolation(several, problems, code=code)
 
 
 def _overlap(

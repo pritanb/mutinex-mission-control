@@ -98,9 +98,7 @@ def refuse_if_invalidated(
     for p in problems:
         ids = p.refs.get("crew_profile_ids") or [p.refs["crew_profile_id"]]
         affected += [i for i in ids if isinstance(i, int) and i not in affected]
-    raise RuleViolation(
-        message([names[i] for i in affected]), problems, code="invalidates_assignments"
-    )
+    raise RuleViolation(message([names[i] for i in affected]), problems)
 
 
 # What identifies a conflict's cause, so the same conflict is recognised before and after an

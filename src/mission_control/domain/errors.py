@@ -46,7 +46,10 @@ class NotFound(Exception):
 
 
 class RuleViolation(Exception):
-    """A change conflicts with the rules or the current state. Carries every problem at once."""
+    """A change conflicts with the rules or the current state. Carries every problem at once.
+
+    A rule refusal's code is always `rule_violation`, with a summary message; each reason is a
+    problem with its own code. Only state conflicts (`StateConflict`) set a code of their own."""
 
     def __init__(self, message: str, problems: Sequence[Problem], code: str = "rule_violation"):
         if not problems:
@@ -58,8 +61,9 @@ class RuleViolation(Exception):
 
     @classmethod
     def of(cls, problem: Problem) -> "RuleViolation":
-        """A refusal with a single reason takes that reason's code and message."""
-        return cls(problem.message, [problem], code=problem.code)
+        """A refusal with a single reason, which also serves as its message. The code stays
+        `rule_violation`; the reason's own code is in `problems`."""
+        return cls(problem.message, [problem])
 
 
 class InvalidInput(ValueError):

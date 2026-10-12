@@ -16,12 +16,12 @@ so its approval round stops counting. That return is audited straight after the 
 caused it.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from types import MappingProxyType
 
 from mission_control.domain.eligibility import ineligibility_reasons
 from mission_control.domain.enums import Action, AssignmentStatus, MissionStatus
-from mission_control.domain.errors import InvalidInput, Problem, RuleViolation
+from mission_control.domain.errors import InvalidInput, Problem
 from mission_control.domain.events import Event
 from mission_control.domain.lifecycle import (
     StateConflict,
@@ -41,6 +41,7 @@ from mission_control.infra.repositories.models import (
 )
 from mission_control.services.context import (
     ServiceContext,
+    check,
     found,
     mission_context,
     return_to_draft,
@@ -98,7 +99,7 @@ def propose(ctx: ServiceContext, mission_id: int, slot_id: int, crew_profile_id:
             *_slot_full(mission, slot),
             *_ineligibility(repos, mission, slot, profile),
         ]
-        _refuse(
+        check(
             problems, f"{profile.display_name} can't be proposed as {slot.name} on {mission.name}"
         )
 
@@ -120,7 +121,7 @@ def accept(ctx: ServiceContext, assignment_id: int) -> Assignment:
         ctx.authorize(Action.ACCEPT, _about(profile))
         _check_state(Action.ACCEPT, assignment.status, mission)
         slot = _slot_of(repos, mission, assignment)
-        _refuse(
+        check(
             _ineligibility(repos, mission, slot, profile),
             f"{profile.display_name} can't accept {slot.name} on {mission.name}",
         )
@@ -294,14 +295,6 @@ def _ineligibility(
     """Every reason the person can't fill the slot, with commitments on this mission left out."""
     person = found(repos.facts.candidate(profile.id, excluding_mission_id=mission.id), _CREW_MEMBER)
     return ineligibility_reasons(person, slot, mission.window)
-
-
-def _refuse(problems: Sequence[Problem], message: str) -> None:
-    """A single reason is raised under its own code; several are listed together."""
-    if len(problems) == 1:
-        raise RuleViolation.of(problems[0])
-    if problems:
-        raise RuleViolation(message, problems)
 
 
 # Writing

@@ -21,10 +21,10 @@ def test_rule_violation_needs_at_least_one_problem():
         RuleViolation("Nothing wrong", [])
 
 
-def test_a_single_problem_becomes_a_rule_violation_with_its_own_code():
+def test_a_single_problem_refusal_keeps_the_rule_violation_code_and_uses_it_as_the_message():
     p = Problem("overlap", "Gus has an accepted assignment on Station Reboost")
     err = RuleViolation.of(p)
-    assert (err.code, err.message, err.problems) == ("overlap", p.message, (p,))
+    assert (err.code, err.message, err.problems) == ("rule_violation", p.message, (p,))
 
 
 def test_state_conflict_is_a_rule_violation_that_keeps_its_problem():

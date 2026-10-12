@@ -132,7 +132,8 @@ def test_s1_owner_proposes_an_eligible_crew_member(seeded_db):
 def test_s4_gus_proposal_is_refused_for_overlapping_station_reboost(seeded_db):
     before = snapshot(seeded_db)
     error = refused(assignments.propose, as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, GUS_ID)
-    assert error.code == "overlap"
+    assert error.code == "rule_violation"
+    assert error.message == "Gus can't be proposed as Flight Engineer on Lunar Gateway Resupply"
     assert [p.code for p in error.problems] == ["overlap"]
     problem = error.problems[0]
     assert "Gus" in problem.message and "Station Reboost" in problem.message
@@ -144,7 +145,7 @@ def test_s4_gus_proposal_is_refused_for_overlapping_station_reboost(seeded_db):
 def test_s4_fay_proposal_is_refused_for_unavailability(seeded_db):
     before = snapshot(seeded_db)
     error = refused(assignments.propose, as_(seeded_db, LEE), GATEWAY, COMMANDER, FAY_ID)
-    assert error.code == "unavailable"
+    assert error.code == "rule_violation"
     assert [p.code for p in error.problems] == ["unavailable"]
     assert "Fay" in error.problems[0].message
     assert "Medical" not in error.message  # the reason stays private
@@ -164,7 +165,8 @@ def test_s1_full_slot_is_refused(seeded_db):
     assignments.propose(as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, CHEN_ID)
     before = snapshot(seeded_db)
     error = refused(assignments.propose, as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, ANA_ID)
-    assert error.code == "slot_full"
+    assert error.code == "rule_violation"
+    assert [p.code for p in error.problems] == ["slot_full"]
     assert dict(error.problems[0].refs) == {"slot_id": FLIGHT_ENGINEER}
     assert "Flight Engineer" in error.message
     assert snapshot(seeded_db) == before
@@ -174,13 +176,14 @@ def test_s1_second_open_assignment_on_the_same_mission_is_refused(seeded_db):
     first = assignments.propose(as_(seeded_db, LEE), GATEWAY, COMMANDER, ANA_ID)
     before = snapshot(seeded_db)
     error = refused(assignments.propose, as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, ANA_ID)
-    assert error.code == "already_assigned"
+    assert error.code == "rule_violation"
+    assert [p.code for p in error.problems][:1] == ["already_assigned"]
     assert dict(error.problems[0].refs) == {
         "assignment_id": first.id,
         "crew_profile_id": ANA_ID,
         "mission_id": GATEWAY,
     }
-    assert "Ana" in error.message and "Commander" in error.message
+    assert "Ana" in error.problems[0].message and "Commander" in error.problems[0].message
     assert snapshot(seeded_db) == before
 
 
@@ -315,9 +318,10 @@ def test_ac15_chens_second_acceptance_names_station_reboost(seeded_db):
 
     before = snapshot(seeded_db)
     error = refused(assignments.accept, as_(seeded_db, CHEN), on_gateway.id)
-    assert error.code == "overlap"
+    assert error.code == "rule_violation"
+    assert [p.code for p in error.problems] == ["overlap"]
     assert error.problems[0].refs["mission_name"] == "Station Reboost"
-    assert "Station Reboost" in error.message
+    assert "Station Reboost" in error.problems[0].message
     assert snapshot(seeded_db) == before
     assert status_of(seeded_db, on_gateway.id) == "proposed"
 
@@ -326,7 +330,8 @@ def test_s2_acceptance_rechecks_skills(seeded_db):
     made = assignments.propose(as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, CHEN_ID)
     Repos(seeded_db, 1).crew.set_skill(CHEN_ID, SYS_ENG, 2, updated_by=LEE.user_id)
     error = refused(assignments.accept, as_(seeded_db, CHEN), made.id)
-    assert error.code == "skill_below_minimum"
+    assert error.code == "rule_violation"
+    assert [p.code for p in error.problems] == ["skill_below_minimum"]
     assert "Chen" in error.message
 
 
@@ -705,11 +710,12 @@ def test_cascade_needs_a_final_status(seeded_db, status):
 
 
 def test_s4_scenario(seeded_db):
-    with pytest.raises(RuleViolation, match="Station Reboost"):
+    with pytest.raises(RuleViolation) as gus:
         assignments.propose(as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, GUS_ID)
+    assert "Station Reboost" in gus.value.problems[0].message
     with pytest.raises(RuleViolation) as fay:
         assignments.propose(as_(seeded_db, LEE), GATEWAY, COMMANDER, FAY_ID)
-    assert fay.value.code == "unavailable"
+    assert [p.code for p in fay.value.problems][:1] == ["unavailable"]
     on_reboost = assignments.propose(as_(seeded_db, NORA), REBOOST, REBOOST_ENGINEER, CHEN_ID)
     on_gateway = assignments.propose(as_(seeded_db, LEE), GATEWAY, FLIGHT_ENGINEER, CHEN_ID)
     assert assignments.accept(as_(seeded_db, CHEN), on_reboost.id).status == A.ACCEPTED

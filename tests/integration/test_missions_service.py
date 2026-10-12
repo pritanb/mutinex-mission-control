@@ -531,9 +531,7 @@ def test_m2_an_edit_cannot_put_the_end_before_the_start(seeded_db):
     before = snapshot(seeded_db)
     with pytest.raises(InvalidInput) as err:
         missions.update_mission(svc(seeded_db, LEE), GATEWAY, start=d("2027-03-11"))
-    assert err.value.problems[0].message == (
-        "The end date 2027-03-10 is before the start date 2027-03-11"
-    )
+    assert err.value.message == ("The end date 2027-03-10 is before the start date 2027-03-11")
     assert snapshot(seeded_db) == before
 
 
@@ -654,7 +652,7 @@ def test_m7_a_date_change_that_breaks_open_assignments_is_refused_naming_everyon
         missions.update_mission(
             svc(seeded_db, NORA), REBOOST, start=d("2027-01-12"), end=d("2027-03-06")
         )
-    assert err.value.code == "invalidates_assignments"
+    assert err.value.code == "rule_violation"
     assert err.value.message == (
         "Can't change the dates of Station Reboost: Gus and Chen would no longer be "
         "eligible. Remove them from the mission first."
@@ -698,7 +696,7 @@ def test_m7_a_date_change_is_refused_only_for_the_conflicts_it_introduces(seeded
     before = snapshot(seeded_db)
     with pytest.raises(RuleViolation) as err:
         missions.update_mission(svc(seeded_db, LEE), GATEWAY, end=d("2027-03-12"))
-    assert err.value.code == "invalidates_assignments"
+    assert err.value.code == "rule_violation"
     assert err.value.message == (
         "Can't change the dates of Lunar Gateway Resupply: Chen would no longer be eligible. "
         "Remove them from the mission first."
@@ -841,7 +839,7 @@ def test_m7_lowering_headcount_below_assigned_crew_is_refused(seeded_db):
     before = snapshot(seeded_db)
     with pytest.raises(RuleViolation) as err:
         missions.update_slot(svc(seeded_db, NORA), REBOOST, REBOOST_ENGINEER, headcount=1)
-    assert err.value.code == "invalidates_assignments"
+    assert err.value.code == "rule_violation"
     assert err.value.message == (
         "Can't lower the headcount of Engineer on Station Reboost: Gus and Chen are assigned. "
         "Remove crew from the slot first."
@@ -941,7 +939,7 @@ def test_m7_a_requirement_change_that_breaks_an_assignee_is_refused(seeded_db):
         missions.replace_requirements(
             svc(seeded_db, NORA), REBOOST, REBOOST_ENGINEER, {SYS_ENG: 3, EVA: 1}
         )
-    assert err.value.code == "invalidates_assignments"
+    assert err.value.code == "rule_violation"
     assert err.value.message == (
         "Can't change the requirements of Engineer on Station Reboost: Gus would no longer be "
         "eligible. Remove them from the mission first."
@@ -1017,7 +1015,7 @@ def test_m7_a_refused_edit_leaves_a_pending_mission_pending_with_its_approvals(s
     before = snapshot(seeded_db)
     with pytest.raises(RuleViolation) as err:
         missions.replace_requirements(svc(seeded_db, NORA), COMMS, COMMS_ENGINEER, {SYS_ENG: 5})
-    assert err.value.code == "invalidates_assignments"
+    assert err.value.code == "rule_violation"
     assert snapshot(seeded_db) == before
     view = missions.get_mission(svc(seeded_db, NORA), COMMS)
     assert view.mission.status == MissionStatus.PENDING_APPROVAL
@@ -1073,7 +1071,7 @@ def test_m7_removing_a_slot_with_open_assignments_is_refused(seeded_db):
     before = snapshot(seeded_db)
     with pytest.raises(RuleViolation) as err:
         missions.remove_slot(svc(seeded_db, NORA), REBOOST, REBOOST_ENGINEER)
-    assert err.value.code == "invalidates_assignments"
+    assert err.value.code == "rule_violation"
     assert err.value.message == (
         "Can't remove Engineer from Station Reboost while Gus is assigned to it. "
         "Remove them from the mission first."
@@ -1090,7 +1088,7 @@ def test_m2_a_missions_last_slot_cannot_be_removed(seeded_db):
     with pytest.raises(RuleViolation) as err:
         missions.remove_slot(svc(seeded_db, NORA), ASTEROID, PILOT)
     message = "Can't remove Pilot: Asteroid Survey needs at least one slot"
-    assert (err.value.code, err.value.message) == ("mission_needs_a_slot", message)
+    assert (err.value.code, err.value.message) == ("rule_violation", message)
     assert [(p.code, p.message, dict(p.refs)) for p in err.value.problems] == [
         ("mission_needs_a_slot", message, {"slot_id": PILOT})
     ]
@@ -1306,7 +1304,7 @@ def test_m1_transferring_to_the_current_owner_is_refused(seeded_db):
     with pytest.raises(RuleViolation) as err:
         missions.transfer_ownership(svc(seeded_db, RUTH), COMMS, NORA.user_id)
     message = "Nora Quinn already owns Deep Space Comms Upgrade"
-    assert (err.value.code, err.value.message) == ("already_owner", message)
+    assert (err.value.code, err.value.message) == ("rule_violation", message)
     assert [(p.code, p.message, dict(p.refs)) for p in err.value.problems] == [
         ("already_owner", message, {"user_id": NORA.user_id})
     ]
