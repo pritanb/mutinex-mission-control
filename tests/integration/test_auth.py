@@ -377,3 +377,22 @@ def test_change_password_is_refused_if_the_password_changed_after_it_was_verifie
         ).fetchone()[0]
         == 0
     )
+
+
+# --- Who am I (GET /me) -------------------------------------------------------------------
+
+
+def test_whoami_returns_the_callers_account_organisation_and_crew_profile(db):
+    actor = auth.authenticate(db, login(db, "ana@aurora.example").token, now=NOW)
+    me = auth.whoami(db, actor)
+    assert (me.user.name, me.user.email, me.user.role) == (
+        "Ana Okafor",
+        "ana@aurora.example",
+        Role.LEAD,
+    )
+    assert (me.organisation.name, me.crew_profile_id) == ("Aurora Space Agency", ANA)
+
+
+def test_whoami_for_someone_without_a_crew_profile(db):
+    actor = auth.authenticate(db, login(db).token, now=NOW)
+    assert auth.whoami(db, actor).crew_profile_id is None

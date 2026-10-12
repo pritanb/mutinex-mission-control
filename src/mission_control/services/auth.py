@@ -12,7 +12,7 @@ from mission_control.domain.permissions import Actor
 from mission_control.infra import security
 from mission_control.infra.db import read_tx, write_tx
 from mission_control.infra.repositories import Repos
-from mission_control.infra.repositories.models import User
+from mission_control.infra.repositories.models import Organisation, User
 
 SESSION_LIFETIME = timedelta(hours=12)
 
@@ -24,6 +24,15 @@ class Session:
     token: str  # shown to the client once; only its hash is stored
     expires_at: datetime
     user: User
+
+
+@dataclass(frozen=True)
+class Me:
+    """The caller's own account, as they see it when they ask who they're logged in as."""
+
+    user: User
+    organisation: Organisation
+    crew_profile_id: int | None
 
 
 def _now(now: datetime | None) -> datetime:
@@ -88,6 +97,16 @@ def authenticate(
         role=Role(row["role"]),
         crew_profile_id=row["crew_profile_id"],
     )
+
+
+def whoami(conn: sqlite3.Connection, actor: Actor) -> Me:
+    """The caller's own account and organisation. Anyone may see their own."""
+    with read_tx(conn):
+        repos = Repos(conn, actor.org_id)
+        user = repos.users.get(actor.user_id)
+        if user is None:  # authenticate() has just found them
+            raise _session_error()
+        return Me(user, repos.organisation.get(), actor.crew_profile_id)
 
 
 def logout(conn: sqlite3.Connection, token: str, *, now: datetime | None = None) -> None:
