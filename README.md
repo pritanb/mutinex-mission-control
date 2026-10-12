@@ -184,4 +184,4 @@ The design documents were written first and then used to direct a coding agent (
 - [`CLAUDE.md`](CLAUDE.md) holds the agent's rules: one approved module at a time, tests first, a real run, a read-only review, and no commit without approval. Independent modules ran in parallel git worktrees.
 - [Design §9](docs/technical-design.md#9-delivery-plan) is the module-by-module plan, and [§10](docs/technical-design.md#10-guidelines-for-implementing-agents) the guidelines the agent followed.
 - [`docs/phase-reviews.md`](docs/phase-reviews.md) records each phase's divergences and its end-of-phase review.
-- The full, unedited AI transcripts are provided separately with the submission.
+- [`transcripts/`](transcripts/README.md) holds the full, unedited AI transcripts: every Claude Code session and subagent conversation, as readable Markdown.
