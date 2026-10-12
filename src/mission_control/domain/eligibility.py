@@ -88,7 +88,7 @@ def _skill_shortfalls(
 # Workload
 
 
-def workload(assignments: Iterable[AssignmentFact], excluding_mission_id: int) -> int:
+def workload(assignments: Iterable[AssignmentFact], excluding_mission_id: int | None) -> int:
     """Mission-days of accepted assignments on missions that aren't completed."""
     return sum(
         a.window.mission_days

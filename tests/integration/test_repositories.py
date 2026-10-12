@@ -8,7 +8,8 @@ from builders import make_assignment, make_slot
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus, Role
 from mission_control.domain.permissions import Actor
-from mission_control.infra.repositories import Repos, _Scoped
+from mission_control.infra.repositories import Repos
+from mission_control.infra.repositories.base import Scoped
 
 AURORA, HELIX = 1, 2
 GATEWAY, ASTEROID, MEDICAL, TELESCOPE, COMMS, MARS, PAYLOAD = 1, 2, 4, 5, 6, 7, 8
@@ -219,7 +220,7 @@ def test_another_orgs_crew_member_is_unknown_to_this_orgs_repos(seeded_db):
 # --- Mis-binding: org_id is bound by name, so placeholder order can't leak rows -------------
 
 
-class _MisorderedMissionLookup(_Scoped):
+class _MisorderedMissionLookup(Scoped):
     """Puts the org filter last; with positional binding this would read another org's row."""
 
     def get(self, mission_id: int):

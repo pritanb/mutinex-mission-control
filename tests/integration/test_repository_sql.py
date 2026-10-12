@@ -12,8 +12,9 @@ SQL = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)\b", re.I)
 
 # The org filter, written exactly as `org_id = :org`, optionally alias-qualified (`m.org_id`).
 ORG_FILTER = re.compile(r"(?<![\w.])(?:\w+\.)?org_id = :org\b")
-# The organisations table is the tenant itself: its own id is the caller's org.
-TENANT_LOOKUP = re.compile(r"\bFROM organisations WHERE id = :org\b")
+# The organisations table is the tenant itself: its own id is the caller's org, so a statement
+# on it must be scoped by `WHERE id = :org` (reads and the settings update alike).
+TENANT_LOOKUP = re.compile(r"\borganisations\b[^;]*\bWHERE id = :org\b")
 # An INSERT has no WHERE: it must write the org as its first column, from the named :org value.
 ORG_INSERT = re.compile(r"^\s*INSERT INTO \w+\s*\(\s*org_id\s*,[^)]*\)\s*VALUES\s*\(\s*:org\s*,")
 POSITIONAL = re.compile(r"\?")
@@ -78,6 +79,11 @@ def test_every_repository_query_filters_on_the_named_org():
         ("SELECT * FROM organisations WHERE id = ?", "positional ? placeholder"),
         ("SELECT * FROM organisations WHERE id = :id", "no `org_id = :org` filter"),
         (
+            "UPDATE organisations SET required_approvals = :n WHERE id = :id",
+            "no `org_id = :org` filter",
+        ),
+        ("UPDATE organisations SET required_approvals = :n", "no `org_id = :org` filter"),
+        (
             "INSERT INTO audit_events(org_id, event) VALUES (:other, :org)",
             "no `org_id = :org` filter",
         ),
@@ -97,6 +103,7 @@ def test_the_guard_flags_unsafe_statements(sql, reason):
         "SELECT * FROM missions WHERE org_id = :org AND id = :id",
         "SELECT * FROM missions m WHERE m.org_id = :org AND m.id = :id",
         "SELECT * FROM organisations WHERE id = :org",
+        "UPDATE organisations SET required_approvals = :n WHERE id = :org",
         "INSERT INTO audit_events(org_id, event) VALUES (:org, :event)",
     ],
 )

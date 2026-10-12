@@ -6,7 +6,7 @@ from types import MappingProxyType
 from mission_control.domain.dates import DateRange
 from mission_control.domain.eligibility import ineligibility_reasons
 from mission_control.domain.enums import Action, AssignmentStatus, MissionStatus
-from mission_control.domain.errors import Problem
+from mission_control.domain.errors import Problem, RuleViolation
 from mission_control.domain.records import RosterEntry, SlotSpec
 
 M = MissionStatus
@@ -61,11 +61,12 @@ def _wrong_state(status: MissionStatus, doing: str) -> Problem:
     return Problem(code, f"Can't {doing} a mission {_STATE_PHRASE[status]}")
 
 
-class StateConflict(Exception):
-    """The mission's state doesn't allow the change. `problem` says why."""
+class StateConflict(RuleViolation):
+    """The mission's state doesn't allow the change. `problem` says why; its code and message
+    become the refusal's own."""
 
     def __init__(self, problem: Problem) -> None:
-        super().__init__(problem.message)
+        super().__init__(problem.message, [problem], code=problem.code)
         self.problem = problem
 
 
