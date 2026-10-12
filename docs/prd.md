@@ -326,7 +326,7 @@ Every acceptance criterion maps to at least one automated test.
 
 - Web UI.
 - Self-service organisation signup, users in more than one organisation, SSO.
-- Password recovery and email flows. Deleting crew profiles.
+- Password recovery and email flows. Deleting crew profiles. Reactivating deactivated users.
 - Delivering notifications. The CLI's "needs attention" views replace them.
 - Certifications, skill expiry, skill verification, skill hierarchies.
 - Recurring availability, scheduling finer than a day, rest periods between missions.

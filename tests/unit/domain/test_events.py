@@ -15,4 +15,13 @@ def test_event_names_are_the_stored_audit_strings():
         "CREW_UNAVAILABILITY_REMOVED": "crew.unavailability_removed",
         "CREW_SKILL_SET": "crew.skill_set",
         "CREW_SKILL_REMOVED": "crew.skill_removed",
+        # M9 admin
+        "ORG_REQUIRED_APPROVALS_CHANGED": "org.required_approvals_changed",
+        "USER_CREATED": "user.created",
+        "USER_ROLE_CHANGED": "user.role_changed",
+        "USER_DEACTIVATED": "user.deactivated",
+        "CREW_PROFILE_CREATED": "crew_profile.created",
+        "SKILL_CREATED": "skill.created",
+        "SKILL_UPDATED": "skill.updated",
+        "SKILL_DELETED": "skill.deleted",
     }

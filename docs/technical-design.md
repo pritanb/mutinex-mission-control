@@ -400,6 +400,7 @@ Every error has the same shape, for every status code (401, 403, 404, 409, 422, 
 | `invalidates_active_assignment` | A skill change would break an assignment on an Active mission | `mission_id`, `skill_id` |
 | `slot_unfilled` | Submitting with empty places | `slot_id` |
 | `proposal_unanswered` | Submitting while a proposal is still waiting for a reply (the message names the person and slot) | `assignment_id`, `slot_id`, `crew_profile_id` |
+| `already_exists` | Inside a 409 `rule_violation`: the email address is already in use (anywhere on the platform, since login is by email alone; see [TR-13](#tr-13)), a skill name is already in the catalogue (ignoring case), or the user already has a crew profile | `email`; `skill_id`; `user_id`, `crew_profile_id` |
 
 ---
 
@@ -828,6 +829,7 @@ The main sections reference these decisions by ID, for example [TR-1](#tr-1).
 | <a id="tr-10"></a>TR-10 | **404 for anything not visible** | 403 | Never reveals that another tenant's data exists | Slightly harder to debug. Logs record the real reason. |
 | <a id="tr-11"></a>TR-11 | **`BEGIN IMMEDIATE` per write** | Optimistic locking or version columns | No race conditions in check-then-write rules | Writes are serialized, which is fine at this scale |
 | <a id="tr-12"></a>TR-12 | **Integer IDs** | UUIDs | Short and easy to type in the CLI | IDs can be guessed, but 404s and scoping make that harmless |
+| <a id="tr-13"></a>TR-13 | **Emails unique across the platform** | Unique per organisation, with login by org + email | Login needs only an email; one account per person | Refusing a duplicate email reveals that the address is in use in another organisation. The refusal names only the email, never that organisation or user. |
 
 ### B.2 Risks
 
