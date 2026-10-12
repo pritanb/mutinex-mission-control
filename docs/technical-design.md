@@ -383,9 +383,11 @@ Every error has the same shape, for every status code (401, 403, 404, 409, 422, 
 | 401 | Not authenticated | `invalid_credentials` `unauthenticated` |
 | 403 | Not allowed | `role_forbidden` `not_owner` `approver_is_creator` `approver_is_rostered` `self_skill_edit` `wrong_current_password` |
 | 404 | Not found or not visible | `not_found` |
-| 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation` `overlap` `unavailable` `insufficient_approvers` `invalidates_assignments` `invalidates_active_assignment`<br>**Admin:** `has_open_assignments` `owns_open_missions` `last_director` `skill_in_use` |
+| 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation` `overlap` `unavailable` `insufficient_approvers` `invalidates_assignments` `invalidates_active_assignment` `mission_needs_a_slot` `already_owner`<br>**Admin:** `has_open_assignments` `owns_open_missions` `last_director` `skill_in_use` |
 | 422 | Invalid input | `validation_error` `password_too_short` |
 | 503 | Database busy, retry | `busy` |
+
+Malformed mission and slot values are 422 `validation_error`, and every mistake is listed at once: a blank mission or slot name, a headcount below 1, a slot with no required skill, a minimum level outside 1–5, an end date before the start date, or a Director creating a mission without naming its owner.
 
 **Problem codes.** These appear inside `problems` and explain each refusal. Adding one means updating this table in the same change.
 
@@ -400,7 +402,10 @@ Every error has the same shape, for every status code (401, 403, 404, 409, 422, 
 | `invalidates_active_assignment` | A skill change would break an assignment on an Active mission | `mission_id`, `skill_id` |
 | `slot_unfilled` | Submitting with empty places | `slot_id` |
 | `proposal_unanswered` | Submitting while a proposal is still waiting for a reply (the message names the person and slot) | `assignment_id`, `slot_id`, `crew_profile_id` |
-| `already_exists` | Inside a 409 `rule_violation`: the email address is already in use (anywhere on the platform, since login is by email alone; see [TR-13](#tr-13)), a skill name is already in the catalogue (ignoring case), or the user already has a crew profile | `email`; `skill_id`; `user_id`, `crew_profile_id` |
+| `already_exists` | Inside a 409 `rule_violation`: the email address is already in use (anywhere on the platform, since login is by email alone; see [TR-13](#tr-13)), a skill name is already in the catalogue (ignoring case), the user already has a crew profile, or a mission already has a live slot with that name (ignoring case; a new mission's slots are also checked against each other, and have no `slot_id` yet) | `email`; `skill_id`; `user_id`, `crew_profile_id`; `slot_id` |
+| `owner_not_active_lead` | The owner named for a new mission, or for a transfer, isn't a Mission Lead or is deactivated (inside a 409 `rule_violation`) | `user_id` |
+| `mission_needs_a_slot` | Removing a mission's only slot (also the 409's own code) | `slot_id` |
+| `already_owner` | Transferring a mission to the Lead who already owns it (also the 409's own code) | `user_id` |
 
 ---
 

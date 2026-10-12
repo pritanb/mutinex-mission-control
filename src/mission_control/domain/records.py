@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus
 
+# The range of a skill level, whether held by a person or required by a slot.
+MIN_LEVEL, MAX_LEVEL = 1, 5
+
 
 @dataclass(frozen=True)
 class Requirement:

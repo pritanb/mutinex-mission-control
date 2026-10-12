@@ -17,6 +17,7 @@ from mission_control.domain.eligibility import invalidated_by_skill_change
 from mission_control.domain.errors import InvalidInput, Problem, RuleViolation
 from mission_control.domain.events import Event
 from mission_control.domain.permissions import Action, Context, can
+from mission_control.domain.records import MAX_LEVEL, MIN_LEVEL
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import (
     AssignmentSummary,
@@ -25,8 +26,6 @@ from mission_control.infra.repositories.models import (
     User,
 )
 from mission_control.services.context import ServiceContext, found
-
-MIN_LEVEL, MAX_LEVEL = 1, 5
 
 _CREW_MEMBER = "Crew member"
 

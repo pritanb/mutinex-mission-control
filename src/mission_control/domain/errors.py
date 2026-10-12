@@ -64,10 +64,13 @@ class RuleViolation(Exception):
 
 class InvalidInput(ValueError):
     """A value the caller supplied is malformed, e.g. a blank name or a level out of range.
-    Answered as 422. Distinct from plain ValueError, which also signals programming errors."""
+    Answered as 422. Distinct from plain ValueError, which also signals programming errors.
+
+    `problems` lists every mistake at once; given none, the message is the only one."""
 
     code = "validation_error"
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, problems: Sequence[Problem] = ()) -> None:
         super().__init__(message)
         self.message = message
+        self.problems = tuple(problems) or (Problem(self.code, message),)

@@ -24,4 +24,12 @@ def test_event_names_are_the_stored_audit_strings():
         "SKILL_CREATED": "skill.created",
         "SKILL_UPDATED": "skill.updated",
         "SKILL_DELETED": "skill.deleted",
+        # M11 missions
+        "MISSION_UPDATED": "mission.updated",
+        "MISSION_TRANSFERRED": "mission.transferred",
+        "MISSION_RETURNED_TO_DRAFT": "mission.returned_to_draft",
+        "SLOT_ADDED": "slot.added",
+        "SLOT_UPDATED": "slot.updated",
+        "SLOT_REQUIREMENTS_CHANGED": "slot.requirements_changed",
+        "SLOT_REMOVED": "slot.removed",
     }
