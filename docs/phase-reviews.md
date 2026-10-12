@@ -105,65 +105,115 @@ A read-only subagent reviewed M6–M8, and three fix agents with separate file o
 
 ---
 
-## Phase 3: Services (SF, M9–M14), in progress
+## Phase 3: Services (SF, M9–M14)
 
-`8ccb5c3` → … · 875 tests on `main` so far · use cases on top of the domain and repositories
+`8ccb5c3` → `234142c` plus M14 apply and the inbox · use cases on top of the domain and repositories
 
-**Status:**
-- Merged: SF, M10, M9.
-- M11 is built and under independent review.
-- M14 preview is being built.
-- M12 and M13 haven't started.
-- This section is updated as each module lands.
-
-**Headline so far:** Phase 3 is the first phase built in parallel. The plan's rules held for every merged module. The changes are in *how* we work (waves, worktrees, review on `main`), plus a few shared pieces the services turned out to need.
+**Headline:** the first phase built in parallel. Every PRD rule now holds at the service level, and every scenario (S1–S9) runs through the services. The changes were in *how* we worked, plus one convention for refusals and an inbox the design had named but not defined.
 
 ### Where we diverged
 
 | Change | Why |
 |---|---|
-| **A service foundation (SF) module was added** before the services | Without it, every service would have written its own context, error types and fact loaders. SF made them shared and reviewed once. |
-| **Waves in git worktrees** instead of strictly one module at a time | Independent modules (M9 ∥ M10 ∥ M11) can be built in parallel and still reviewed one branch at a time |
-| **Repositories split into one file per area** | Each wave module owns its own repository file, so parallel branches rarely conflict |
-| **Review happens on `main` as staged changes** before the commit | Easier to read line by line in the IDE than a diff against a worktree branch |
-| **One shared 422 error (`InvalidInput`)** | Two agents invented their own. Plain `ValueError` also signals programming errors, so the API can't map it safely. |
-| **`StateConflict` is a `RuleViolation`** | Services and the API handle one family of 409 refusals |
-| **New problem code `already_exists`**; **TR-13**: emails are unique across the platform | Duplicate email, skill name or crew profile. The trade-off: a duplicate-email refusal reveals that the address is in use elsewhere. |
-| **M14 split:** preview now, apply after M12 | Apply needs M12's propose path. Preview needs only what's merged. |
+| **A service foundation (SF) module was added** before the services | Without it, every service would have written its own context, error types and fact loaders |
+| **Waves in git worktrees** instead of strictly one module at a time | Independent modules (M9 ∥ M10 ∥ M11, then M13 ∥ M14) were built in parallel and still reviewed one branch at a time |
+| **Repositories split into one file per area**, missions further split into missions, slots and crew | Parallel branches rarely conflict; each file stays readable |
+| **Review happens on `main` as staged changes** before the commit | Easier to read line by line in the IDE |
+| **One 409 convention:** a rule refusal's code is always `rule_violation`, with a summary message and every reason as a problem | Services had mixed two conventions. Clients now branch on `problems[].code`. State conflicts keep their own codes. |
+| **One shared 422 error (`InvalidInput`)** listing every mistake | Two agents invented their own; plain `ValueError` also signals bugs |
+| **New problem codes:** `already_exists`, `owner_not_active_lead`, `mission_needs_a_slot`, `already_owner`, `slot_full`, `already_assigned` | Each refusal names its reason; all are in design §7 |
+| **TR-13:** emails are unique across the platform | Login is by email alone. Trade-off: a duplicate-email refusal reveals the address is in use elsewhere. |
+| **The inbox is defined** (design §7): a live to-do list of proposals to answer, missions to approve, and your draft missions to staff or submit | The design listed `GET /me/inbox` without saying what's in it. Nothing is stored; a stored-notifications model was considered and rejected as more to build and keep in sync. |
+| **The matcher also leaves out crew the owner removed** (PRD §6, AC-21) | Suggesting someone the owner just took off would be odd |
 
 ### Key decisions
 
-- **Privacy:** unavailability reasons never go into the audit log. Only dates do.
-- **No-op updates write nothing.** An update with no fields still checks access, but makes no write and no audit entry.
-- **Reactivating users is out of scope.** Three M9 choices are logged in `docs/backlog.md` for later.
-- **A `cli-ux` skill was created** from Atlassian's CLI principles and "How Terminals Work". It's used to shape matcher output and the CLI mock sessions (`docs/cli-ux.md`).
+- **Edits that break assignments:** refused only for *new* problems; a shortfall someone already had in the same skill doesn't block.
+- **Permission before lookups:** a refused caller can't learn whether a user, crew member or skill exists.
+- **A name-only change keeps a Pending mission Pending;** any other change sends it back to Draft, audited with its cause.
+- **Re-proposing after a decline is allowed.**
+- **Approvals count per round,** with N saved at submit; an approval still counts after its Director leaves.
+- **Privacy:** unavailability reasons never go into the audit log.
+- **No-op updates write nothing.** Reactivating users is out of scope (`docs/backlog.md`).
 
 ### Process notes
 
-- **The M11 agent stopped before its hand-off.** Its work was complete and passing, but the real run, review and test-first evidence were missing. The lead did the real run, and a fresh agent did an independent review.
-- **Another session committed on a wave branch.** A review commit appeared on `m9-admin`. Its contents were verified to be already on `main` before the branch was deleted.
-- **Lint scope widened.** Ruff now excludes `.claude/` as well as `docs/`, because it formats code blocks inside Markdown.
+- The M11 agent stopped before its hand-off; the lead did the real run and a fresh agent reviewed it.
+- Another session committed on a wave branch; its contents were verified to be on `main` before the branch was deleted.
+- Every refactor (SF split, repository split, missions package) was checked with a before/after behaviour snapshot.
 
 ### Modules
 
-| Module | Status | Notes |
+| Module | Commit | Notes |
 |---|---|---|
-| SF service foundation | ✓ `8ccb5c3` | Context, errors, fact loaders, Wave 1 writes. Before/after snapshot identical for the split. |
-| M10 crew | ✓ `d55a7ed` | Reasons hidden from Leads; Active assignments protected from skill changes |
-| M9 admin | ✓ `b6bad6d` | Last Director, owned missions and open assignments block demotion and deactivation; sessions revoked |
-| M11 missions | in review | *To complete:* review findings, decisions, merge commit |
-| M12 assignments | not started | |
-| M13 approvals | not started | |
-| M14 matching | preview in progress | *To complete:* apply after M12 |
+| SF service foundation | `8ccb5c3` | Context, errors, fact loaders |
+| M10 crew | `d55a7ed` | Reasons hidden from Leads; Active assignments protected from skill changes |
+| M9 admin | `b6bad6d` | Last Director, owned missions and open assignments block demotion and deactivation |
+| M11 missions | `8f204f0`, `39d7217` | Create, edit, slots, transfer; repository split first |
+| M14 preview | `4e7152b` | Suggest crew for a draft mission; writes nothing |
+| M12 assignments | `91f3810` | Propose, accept, decline, withdraw, remove, end-of-mission cascade |
+| M13 approvals | `234142c` | Submit, approve, reject, complete, cancel, mission history |
+| 409 convention | `5392748`, `2b279fa` | `rule_violation` everywhere; design §7 updated |
+| M14 apply and inbox | *pending* | Apply proposes through the same path as a hand proposal; inbox per design §7 |
 
 ### Phase-end review
 
-*To complete after M14:* a read-only subagent reviews SF and M9–M14, then the findings and what happened to each.
+A read-only subagent reviewed SF, M9–M14 and the inbox. No High issues: every write is one transaction taken before its checks, refusals write nothing, and a foreign id gets the same 404 as a missing one everywhere. Fixes were applied by parallel subagents, each proving its fix with a test and a real run.
+
+- **Fixed (Medium):**
+  - crew and admin checked input before permission (Ben setting a level of 9 got 422, not 403); now load → authorise → input, with every mistake in one 422;
+  - two 409s stopped at the first problem (create mission, remove the last slot); both now list every problem;
+  - the "can this Director still approve" rule was coded twice; one domain helper now serves approve and the inbox;
+  - the matcher's exclusion of removed crew wasn't in the PRD; the PRD now says so.
+- **Fixed (Low):** audit `data` used four shapes for before/after values; duplicated helpers; module names in `events.py` comments; design wording about `touch_for_change`; singular wording for one clash; seed and session SQL brought under the SQL lint.
+- **Tests added:** AC-7 after a transfer for propose, apply and submit; several problems at once; the realistic refusal for proposing on a Pending mission.
 
 ### Carried forward
 
-*To complete at phase end.* Candidates so far:
-- **M15:**
-  - map `InvalidInput`, `InvalidDateRange` and `PasswordTooShort` to 422, and never plain `ValueError`;
-  - single-reason refusals repeat their message in `problems`, so the CLI shouldn't print it twice.
-- **M16:** render matcher previews per `docs/cli-ux.md`.
+- **Phase 4:** consistent error body with non-empty `problems`; 422 for `InvalidInput`, `InvalidDateRange` and `PasswordTooShort`; matcher previews per `docs/cli-ux.md`; the inbox's "ready to submit" includes eligible approvers.
+
+---
+
+## Phase 4: Interfaces (M15–M17)
+
+*pending* · HTTP API, `mc` CLI, `mc-admin`, README
+
+**Headline:** built as one background wave (M15 ∥ M16, then M17) while Phase 3 finished, then reconciled together. The full S1 golden path runs through the real `mc` binary against the real server, and the README's own commands are tested.
+
+### Where we diverged
+
+| Change | Why |
+|---|---|
+| **The CLI was built against the design's API before the API existed**, then reconciled | Parallel work. The design defines errors but not success bodies, so the CLI guessed; reconciliation found and fixed the mismatches. |
+| **CLI tests check their fake responses against the real API models** | Hand-written fakes hid three mismatches (deactivate field, owner column, inbox shape) |
+| **`GET /me` returns the account, organisation and crew profile** via a new `auth.whoami` | `mc whoami` needs names, not just ids |
+| **`owner_name` in the mission list** | `mc missions list` shows owners |
+| **405 `method_not_allowed` and 500 `internal_error`** use the standard error body; a 500 never includes details | One error shape for every status |
+| **`MC_API_URL`** setting for the CLI | The design had no way to point the CLI at a server |
+| **Passwords:** hidden prompt at a terminal, stdin otherwise, never a flag | Scripts and tests need a non-interactive path |
+| **With `--json`, a refusal prints the error body to stdout** with the same exit code | Scripts get one parseable format |
+| **Confirmations** for changes to a pending mission, cancel, and deactivating a user; `-y` for `--yes` | Deactivation can't be undone |
+| **`mc login` ends the previous session**; logging out offline still removes the local token (exit 4) | Old tokens no longer linger for 12 hours |
+| **`mc-admin init-db | seed [--reset] | create-org`**; its organisation SQL lives in `infra/platform.py`, covered by the SQL lint | Operators create organisations (PRD T3) without SQL outside `infra/` |
+
+### Accepted deviations
+
+- **Malformed JSON gets 422 before 401**, because FastAPI parses the body before authentication. The 422 reveals nothing about the endpoint.
+- **API response schemas reuse the repositories' record types** rather than only service views.
+- **Some foreign ids get 403, not 404,** where a role is refused before any lookup (Leads on admin routes). A missing id gets the same 403, so "same response as a missing id" holds.
+- **`seed --reset` deletes without asking;** the flag is the consent.
+
+### Phase-end review
+
+A read-only subagent reviewed M15–M17 and drove the real binaries. Fixes were applied by parallel subagents, each verified with a test and a real run.
+
+- **Fixed (High):** every failed login re-raised one shared exception, whose growing traceback kept the attempted plaintext passwords in memory. Each failure now raises a fresh exception.
+- **Fixed (Medium):** owner column missing against the real API; fakes unchecked against the API; crew `set-skill` showed the wrong refusal; piped passwords expected the new one twice; `mc-admin` SQL outside `infra/`.
+- **Fixed (Low):** 500s were plain text; isolation sweep missed request variants that reach a different service; re-login left the old session valid; a leftover skip could hide a broken README test; confirmations shown for actions the server would refuse; wording.
+
+- **Polish after the end-to-end run:** the too-few-approvers reason now reads "Only 1 Director can approve this mission; it needs 2"; `mc missions show` says who rejected a mission and why; cancelling says how many open assignments were cancelled; bio changes are audited.
+
+### Backlog
+
+- Split `cli/commands/missions.py` (~750 lines) into lifecycle, crew and slot modules.
+- Check the CLI's request bodies against the API's request models, as responses already are.

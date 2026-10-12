@@ -65,7 +65,7 @@ flowchart TB
 | API | `api/` | Validate input, resolve `Actor`, call a service, map errors | services |
 | Services | `services/` | One use case = one transaction + audit | domain, infra |
 | Domain | `domain/` | Every business rule, pure (no I/O) | nothing |
-| Infra | `infra/` | Connections, schema, scoped repositories, security | domain types |
+| Infra | `infra/` | Connections, schema, settings, scoped repositories, security, platform statements | domain types |
 
 **How a request flows** (example: `mc missions submit 12`)
 
@@ -80,7 +80,7 @@ flowchart TB
 ```
 src/mission_control/
   domain/    dates  enums  errors  eligibility  matching  lifecycle  approvals  permissions  passwords  records
-  infra/     db  schema.sql  security  repositories/
+  infra/     db  schema.sql  settings  security  platform  repositories/
   services/  auth  admin  crew  missions  assignments  approvals  matching  audit  inbox
   api/       app  deps  errors  schemas/  routers/
   cli/       main  client  config  render  resolve  commands/
@@ -88,6 +88,8 @@ src/mission_control/
   admin_cli.py        # mc-admin: init-db, seed, create-org
 tests/  unit/  integration/  api/  cli/  builders.py  conftest.py
 ```
+
+`settings` reads the `MC_*` environment variables. `security` holds the unscoped login and token lookups, and `platform` the unscoped organisation statements `mc-admin create-org` needs before any tenant exists. Everything else goes through `Repos`.
 </details>
 
 ---
@@ -172,7 +174,7 @@ On top of the role, **relationship rules** make the decisions that matter:
 2. **Repositories.** `Repos(conn, org_id)` scopes every query. Another organisation's ID behaves as missing.
 3. **Database.** Composite `(org_id, id)` foreign keys.
 4. **Tests.**
-   - An SQL lint checks every query mentions `org_id`.
+   - An SQL lint checks every query in `repositories/` and `platform` filters on `org_id = :org` and binds by name. Its only exemption is `platform`'s organisation lookup by slug and its insert. `admin_cli.py` holds no SQL.
    - A route inventory makes sure no endpoint is left out of the isolation tests.
    - A cross-organisation sweep compares database snapshots before and after.
 
@@ -229,7 +231,7 @@ The owner can also **remove** an open assignment. Cancelling the mission **cance
 
 | Rule | How it's implemented |
 |---|---|
-| **Back to Draft** | Every mutating service calls `touch_for_change()` first. Draft → no change. Pending → Draft. Active → `mission_frozen`. Final → `mission_final`. |
+| **Back to Draft** | Every change decides the mission's next status through `domain.lifecycle`: `touch_for_change()` for edits, `mission_status_after()` / `mission_status_after_assignment_action()` for transfers and roster changes. So a Pending mission returns to Draft in one place. Draft → no change. Pending → Draft. Active → `mission_frozen`. Final → `mission_final`. |
 | **Edits can't break assignments (M7)** | `invalidated_by()` checks slot removal, headcount, requirements and dates → a `rule_violation` naming everyone affected |
 | **Skill changes (P3)** | Allowed. Refused only if they'd break an **Active** assignment → `invalidates_active_assignment` |
 | **Audit** | Written in the same transaction as the change. Refused actions write nothing. |
@@ -370,13 +372,15 @@ def proficiency(c: CandidateFacts, slot: SlotSpec) -> int:
 |---|---|---|---|
 | Proposals | Anyone with a crew profile | Their own Proposed assignments on Draft missions | accept or decline |
 | Approvals | Directors | Pending missions they're an eligible approver for and haven't approved this round | approve or reject |
-| Missions | The owning Lead | Their Draft missions, each with what's waiting: places to fill (open places, including after a decline, withdrawal or rejection), proposals awaiting replies, or "ready to submit" | staff or submit |
+| Missions | The owning Lead | Their Draft missions, each with what's waiting: places to fill (including after a decline, withdrawal or rejection), proposals awaiting replies, and its eligible approvers against the approvals required; or "ready to submit" | staff or submit |
 
-Not shown: pending missions waiting on others, Active missions, and anything informational. Each section is a few indexed lookups of the caller's own rows (`assignments_profile`, `missions_org_status`, `missions_owner`); the missions section shows counts only and leaves the full eligibility check to submit.
+"Ready to submit" means every place is filled, every proposal is accepted, **and** the organisation has enough eligible approvers for that mission. The missions section counts eligible approvers once per request; submit still re-checks crew eligibility.
+
+Items show summary counts ("3 places unfilled"), not per-slot detail; `mc missions show` has that. Not shown: pending missions waiting on others, Active missions, and anything informational. Each section is a few indexed lookups of the caller's own rows (`assignments_profile`, `missions_org_status`, `missions_owner`).
 
 #### Errors
 
-Every error has the same shape, for every status code (401, 403, 404, 409, 422, 503). `problems` is always present and always has at least one entry, so clients only ever handle one format. A rule or state conflict (409) lists **every** problem at once. A rule refusal's code is always `rule_violation`, with a summary message ("Ben can't be proposed as Flight Engineer on Lunar Gateway Resupply"); each reason is a problem with its own code. Only a state conflict has a code of its own (one of the **State** codes below), repeated as its single problem. A permission refusal (403) lists its single reason, because only one applies and the actor can't fix it themselves. Each problem names the record involved:
+Every error has the same shape, for every status code (401, 403, 404, 405, 409, 422, 500, 503). `problems` is always present and always has at least one entry, so clients only ever handle one format. A rule or state conflict (409) lists **every** problem at once. A rule refusal's code is always `rule_violation`, with a summary message ("Ben can't be proposed as Flight Engineer on Lunar Gateway Resupply"); each reason is a problem with its own code. Only a state conflict has a code of its own (one of the **State** codes below), repeated as its single problem. A permission refusal (403) lists its single reason, because only one applies and the actor can't fix it themselves. Each problem names the record involved:
 
 ```json
 {
@@ -395,9 +399,17 @@ Every error has the same shape, for every status code (401, 403, 404, 409, 422, 
 | 401 | Not authenticated | `invalid_credentials` `unauthenticated` |
 | 403 | Not allowed | `role_forbidden` `not_owner` `approver_is_creator` `approver_is_rostered` `self_skill_edit` `wrong_current_password` |
 | 404 | Not found or not visible | `not_found` |
+| 405 | An unsupported HTTP method on a known path | `method_not_allowed` |
 | 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation`, with the reasons as problem codes (below) |
 | 422 | Invalid input | `validation_error` `password_too_short` |
+| 500 | An unexpected server error. The body never includes details. | `internal_error` |
 | 503 | Database busy, retry | `busy` |
+
+**404 or 403.** A role refused before any lookup (e.g. a Lead on a Directors-only route) gets the same 403 for another organisation's ID as for a missing one. That still meets "same response as a missing ID": nothing about the other organisation is revealed.
+
+**Accepted deviations.**
+- Malformed JSON is answered 422 before authentication is checked, because FastAPI parses the body first.
+- API response schemas reuse the repositories' record types rather than separate API models.
 
 Malformed mission and slot values are 422 `validation_error`, and every mistake is listed at once: a blank mission or slot name, a headcount below 1, a slot with no required skill, a minimum level outside 1–5, an end date before the start date, or a Director creating a mission without naming its owner.
 
@@ -433,27 +445,30 @@ Malformed mission and slot values are 422 `validation_error`, and every mistake 
 | Concern | Behaviour |
 |---|---|
 | Client | An `httpx2` wrapper passed into commands, so tests use `TestClient` and need no server |
-| Auth | Token stored in `~/.config/mission-control/credentials.json` (mode 0600). Cleared on logout, password change or 401. |
+| Server | `MC_API_URL`, default `http://127.0.0.1:8000` |
+| Auth | Token stored in `~/.config/mission-control/credentials.json` (mode 0600). Cleared on logout, password change or 401. `mc login` ends the previous session. |
 | References | Missions and assignments by ID. People by email. Skills by name. Slots by name or position. |
-| Passwords | Hidden prompt only, never a flag. Asked twice when setting one. |
-| Output | Plain tables. No meaning carried by colour alone. `--json` for scripts. |
+| Passwords | A hidden prompt at a terminal, read from stdin otherwise. Never a flag. A new password is asked twice, only at a terminal. |
+| Output | Plain tables. No meaning carried by colour alone. `--json` for scripts: a refusal then prints the error body to stdout, with the same exit code. |
 | Errors | The message, then one bullet per problem, then a hint for known codes |
-| Exit codes | `0` OK · `1` refused · `2` usage · `3` authentication · `4` unreachable or busy |
-| Confirmations | Changing a Pending mission, or cancelling, asks first. `--yes` skips the prompt. |
+| Exit codes | `0` OK · `1` refused · `2` usage · `3` authentication · `4` unreachable or busy · `130` interrupted |
+| Confirmations | Changing a Pending mission, cancelling, and deactivating a user ask first. `--yes` (`-y`) skips the prompt. |
 
 ```bash
 # Everyone
 mc login | logout | whoami | password | inbox
-mc me show | update | unavailable add|list|remove
-mc assignments list [--pending] | accept ID | decline ID | withdraw ID --reason R
+mc me show | update [--name N] [--bio B] | unavailable add|list|remove
+mc assignments list [--pending] | accept ID | decline ID [--reason R] | withdraw ID --reason R
 
 # Leads
 mc missions create --name N --start D --end D --slot "Commander:1:Piloting>=4,Leadership>=3"
-mc missions edit | slot add|edit|remove | match ID [--apply]
+mc missions edit | match ID [--apply]
+mc missions slot add ID --slot SPEC | slot edit ID SLOT [--name N] [--headcount H] [--requires R] | slot remove
 mc missions propose ID --slot S --crew EMAIL | remove-crew ID ASSIGNMENT | submit ID
 mc crew list | show | history | set-skill EMAIL SKILL LEVEL | unset-skill EMAIL SKILL
 
 # Directors
+mc missions create ... --owner EMAIL        # Directors create a mission for a Lead
 mc missions approve ID | reject ID --reason R | transfer ID --owner EMAIL
 mc missions complete ID | cancel ID --reason R | list | show | history
 mc users list | add | set-role | deactivate | enable-crew
@@ -553,9 +568,9 @@ SF comes first so the waves share one service context and one set of fact loader
 
 ### Architecture rules (never break these)
 - `domain/` imports nothing from `infra/`, `services/`, `api/` or `sqlite3`.
-- All SQL lives in `infra/repositories/`, and every query filters on `org_id`.
+- All SQL lives in `infra/` (and the seed loader). Repository queries filter on `org_id`. Only `security` (login and tokens) and `platform` (organisations, for `mc-admin`) are unscoped.
 - `org_id` comes only from the `Actor`. Never read it from request input.
-- Every mutating service calls `touch_for_change()` first, and writes an audit event in the same transaction.
+- Every change decides the mission's next status through `domain.lifecycle` (`touch_for_change()` for edits, `mission_status_after()` / `mission_status_after_assignment_action()` for transfers and roster changes), so a Pending mission returns to Draft in one place. It writes an audit event in the same transaction.
 - Writes open `BEGIN IMMEDIATE` **before** running checks.
 - Errors use the codes in [§7](#7-api). Adding a code means updating that table in the same change.
 
@@ -588,7 +603,9 @@ uv run mc login --email lee@aurora.example
 uv run pytest
 ```
 
-Settings: `MC_DATABASE_PATH` · `MC_TOKEN_TTL_HOURS=12` · `MC_DB_BUSY_TIMEOUT_MS=5000`
+Operators: `mc-admin init-db | seed [--reset] | create-org --name N --director-email E --director-name N`. `seed --reset` deletes the database without asking: the flag is the consent.
+
+Settings: `MC_DATABASE_PATH` · `MC_TOKEN_TTL_HOURS=12` · `MC_DB_BUSY_TIMEOUT_MS=5000` · `MC_API_URL=http://127.0.0.1:8000` (`mc` only)
 
 | Level | Database | Covers |
 |---|---|---|

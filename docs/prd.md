@@ -170,7 +170,7 @@ Accepted ──mission completed──▶ Completed;  open ──mission cancell
 
 The matcher only advises. It suggests crew for a Draft mission's open places and changes nothing. The owner or a Director can preview a suggestion. When the owning Lead applies it, it creates Proposed assignments, which crew still have to accept.
 
-**Candidates.** Active crew profiles in the mission's organisation only. Crew who already have an open assignment on this mission, or who declined or withdrew from it, are left out.
+**Candidates.** Active crew profiles in the mission's organisation only. Crew who already have an open assignment on this mission, who declined or withdrew from it, or whom the owner removed from it, are left out.
 
 **Workload.** The total mission-days of a crew member's accepted assignments on missions that are not Completed, leaving out the mission being matched.
 
@@ -236,7 +236,7 @@ Each criterion starts from a fresh seed. Scenario numbers (S-) refer to §9.3.
 - **AC-18** S2 gives exactly the expected roster on every run.
 - **AC-19** S3 marks Geologist as unfilled. S3b shows a new accepted assignment changing the suggestion.
 - **AC-20** Workload counts only accepted assignments on missions that aren't Completed. Chen's workload is 5, not 35.
-- **AC-21** The suggestion never puts one person in two slots. It never includes anyone who is ineligible, from another organisation, or already excluded from this mission.
+- **AC-21** The suggestion never puts one person in two slots. It never includes anyone who is ineligible, from another organisation, or already excluded from this mission: anyone with an open assignment on it, or who declined, withdrew or was removed by the owner.
 - **AC-22** Running the matcher changes nothing. Applying it creates Proposed assignments.
 
 **Roles and visibility**
