@@ -44,3 +44,8 @@ class Scoped:
 
     def _exec(self, sql: str, **params: object) -> sqlite3.Cursor:
         return self._conn.execute(sql, self._params(params))
+
+    def _changed(self, sql: str, **params: object) -> bool:
+        """Run an UPDATE or DELETE aimed at one row; True if it changed that row. False means
+        the row is missing or belongs to another organisation."""
+        return self._exec(sql, **params).rowcount == 1
