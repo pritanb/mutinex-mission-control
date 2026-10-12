@@ -230,7 +230,7 @@ The owner can also **remove** an open assignment. Cancelling the mission **cance
 | Rule | How it's implemented |
 |---|---|
 | **Back to Draft** | Every mutating service calls `touch_for_change()` first. Draft → no change. Pending → Draft. Active → `mission_frozen`. Final → `mission_final`. |
-| **Edits can't break assignments (M7)** | `invalidated_by()` checks slot removal, headcount, requirements and dates → `invalidates_assignments` |
+| **Edits can't break assignments (M7)** | `invalidated_by()` checks slot removal, headcount, requirements and dates → a `rule_violation` naming everyone affected |
 | **Skill changes (P3)** | Allowed. Refused only if they'd break an **Active** assignment → `invalidates_active_assignment` |
 | **Audit** | Written in the same transaction as the change. Refused actions write nothing. |
 | **Transactions** | One connection per request. `foreign_keys=ON`. `busy_timeout=5000`. `BEGIN IMMEDIATE` *before* checks. Roll back on error. Lock timeout → 503 `busy`. ([TR-11](#tr-11)) |
@@ -320,7 +320,7 @@ def proficiency(c: CandidateFacts, slot: SlotSpec) -> int:
 | POST | `/auth/logout` | Revoke the current token |
 | GET | `/me` | Current user, role and crew profile |
 | POST | `/me/password` | Change password (revokes all sessions) |
-| GET | `/me/inbox` | Things waiting on me |
+| GET | `/me/inbox` | Things waiting on me: a to-do list computed from current data (see below) |
 
 #### Organisation, users and skills (Directors)
 | Method | Path | Purpose |
@@ -362,9 +362,21 @@ def proficiency(c: CandidateFacts, slot: SlotSpec) -> int:
 | GET | `/assignments` | My assignments |
 | POST | `/assignments/{id}/accept` · `decline` · `withdraw` · `remove` | Respond or remove |
 
+#### Inbox
+
+`GET /me/inbox` (`mc inbox`) lists only what is waiting on the caller to act. It's computed from current data on each request, so nothing is stored, nothing is marked as read, and an item disappears once it's dealt with. Every role has one inbox, showing whichever sections apply:
+
+| Section | Shown to | Item | Action |
+|---|---|---|---|
+| Proposals | Anyone with a crew profile | Their own Proposed assignments on Draft missions | accept or decline |
+| Approvals | Directors | Pending missions they're an eligible approver for and haven't approved this round | approve or reject |
+| Missions | The owning Lead | Their Draft missions, each with what's waiting: places to fill (open places, including after a decline, withdrawal or rejection), proposals awaiting replies, or "ready to submit" | staff or submit |
+
+Not shown: pending missions waiting on others, Active missions, and anything informational. Each section is a few indexed lookups of the caller's own rows (`assignments_profile`, `missions_org_status`, `missions_owner`); the missions section shows counts only and leaves the full eligibility check to submit.
+
 #### Errors
 
-Every error has the same shape, for every status code (401, 403, 404, 409, 422, 503). `problems` is always present and always has at least one entry, so clients only ever handle one format. A rule or state conflict (409) lists **every** problem at once. A permission refusal (403) lists its single reason, because only one applies and the actor can't fix it themselves. Each problem names the record involved:
+Every error has the same shape, for every status code (401, 403, 404, 409, 422, 503). `problems` is always present and always has at least one entry, so clients only ever handle one format. A rule or state conflict (409) lists **every** problem at once. A rule refusal's code is always `rule_violation`, with a summary message ("Ben can't be proposed as Flight Engineer on Lunar Gateway Resupply"); each reason is a problem with its own code. Only a state conflict has a code of its own (one of the **State** codes below), repeated as its single problem. A permission refusal (403) lists its single reason, because only one applies and the actor can't fix it themselves. Each problem names the record involved:
 
 ```json
 {
@@ -383,7 +395,7 @@ Every error has the same shape, for every status code (401, 403, 404, 409, 422, 
 | 401 | Not authenticated | `invalid_credentials` `unauthenticated` |
 | 403 | Not allowed | `role_forbidden` `not_owner` `approver_is_creator` `approver_is_rostered` `self_skill_edit` `wrong_current_password` |
 | 404 | Not found or not visible | `not_found` |
-| 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation` `overlap` `unavailable` `insufficient_approvers` `invalidates_assignments` `invalidates_active_assignment` `mission_needs_a_slot` `already_owner` `slot_full` `already_assigned`<br>**Admin:** `has_open_assignments` `owns_open_missions` `last_director` `skill_in_use` |
+| 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation`, with the reasons as problem codes (below) |
 | 422 | Invalid input | `validation_error` `password_too_short` |
 | 503 | Database busy, retry | `busy` |
 
@@ -404,8 +416,13 @@ Malformed mission and slot values are 422 `validation_error`, and every mistake 
 | `proposal_unanswered` | Submitting while a proposal is still waiting for a reply (the message names the person and slot) | `assignment_id`, `slot_id`, `crew_profile_id` |
 | `already_exists` | Inside a 409 `rule_violation`: the email address is already in use (anywhere on the platform, since login is by email alone; see [TR-13](#tr-13)), a skill name is already in the catalogue (ignoring case), the user already has a crew profile, or a mission already has a live slot with that name (ignoring case; a new mission's slots are also checked against each other, and have no `slot_id` yet) | `email`; `skill_id`; `user_id`, `crew_profile_id`; `slot_id` |
 | `owner_not_active_lead` | The owner named for a new mission, or for a transfer, isn't a Mission Lead or is deactivated (inside a 409 `rule_violation`) | `user_id` |
-| `mission_needs_a_slot` | Removing a mission's only slot (also the 409's own code) | `slot_id` |
-| `already_owner` | Transferring a mission to the Lead who already owns it (also the 409's own code) | `user_id` |
+| `insufficient_approvers` | Submitting when fewer eligible approvers exist than the approvals required | — |
+| `has_open_assignments` | Deactivating someone who still holds proposed or accepted assignments | `user_id`, `mission_ids` |
+| `owns_open_missions` | Deactivating, or changing the role of, a Lead who owns unfinished missions | `user_id`, `mission_ids` |
+| `last_director` | Deactivating or demoting the organisation's only active Director | `user_id` |
+| `skill_in_use` | Deleting a skill that crew hold or slots require (the message names them) | `skill_id`, `crew_profile_ids`, `mission_ids` |
+| `mission_needs_a_slot` | Removing a mission's only slot | `slot_id` |
+| `already_owner` | Transferring a mission to the Lead who already owns it | `user_id` |
 | `slot_full` | Proposing someone for a slot with no open places (the message names the slot and mission) | `slot_id` |
 | `already_assigned` | Proposing someone who already holds an open assignment on this mission (the message names their slot) | `assignment_id`, `crew_profile_id`, `mission_id` |
 
