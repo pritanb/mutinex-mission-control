@@ -12,6 +12,8 @@ from mission_control.domain.enums import AssignmentStatus, MissionStatus
 ON_MISSION = (AssignmentStatus.PROPOSED, AssignmentStatus.ACCEPTED, AssignmentStatus.COMPLETED)
 OPEN = (AssignmentStatus.PROPOSED, AssignmentStatus.ACCEPTED)
 FINAL = (MissionStatus.COMPLETED, MissionStatus.CANCELLED)
+# The current UTC time in the same format as the schema's column defaults.
+NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 
 
 def in_list(prefix: str, values: Iterable[object]) -> tuple[str, dict[str, object]]:
