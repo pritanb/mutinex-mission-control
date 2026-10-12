@@ -1,0 +1,23 @@
+{
+  "skill_name": "cli-ux",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review this CLI command for UX problems:\n\n```python\n@app.command()\ndef deploy(env: str, product: str, token: str = typer.Option(...)):\n    print('\\x1b[32mDeploying...\\x1b[0m')\n    try:\n        result = api.deploy(env, product, token)\n    except Exception as e:\n        raise SystemExit(str(e))\n```",
+      "expected_output": "A severity-grouped review. Blocker: the secret is taken as a flag (it ends up in shell history; prompt hidden or read stdin instead). Major: positional env/product should be flags with short forms; the raw exception is shown with no fix hint; there's no success confirmation or next step; the colour code is printed unconditionally, so no TTY or NO_COLOR check and it breaks when piped. Minor: no progress beyond a single line; exit code not distinguished. Each finding gives what the user sees, the rule broken and a concrete rewrite, ending with what works well.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Design the CLI UX for `mc missions submit`: a Lead submits a mission for approval. It can be refused for several reasons at once (unfilled slots, unanswered proposals, too few eligible approvers). Show mock terminal sessions for success, a multi-problem refusal, piped output and --json.",
+      "expected_output": "Mock sessions with exact text. Success confirms the result in words (who must approve) and suggests the next step. The refusal lists every problem, one per line, names the slots and people, gives fix commands, goes to stderr and exits 1. Piped output has no colour or escape codes. The --json shape is stable and documented. Colour is never the only signal. It mentions exit codes (0/1/2/130) and the NO_COLOR/TTY behaviour.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I'm adding a full-screen interactive picker to my Python CLI with raw mode so users can arrow through missions and press Enter to choose. What do I need to get right so it doesn't break people's terminals?",
+      "expected_output": "Terminal-mechanics guidance: use the alternate screen (CSI ?1049h/l) and always leave it; restore cooked mode, cursor visibility and styles in a finally block on every exit path, including exceptions and signals. In raw mode Ctrl+C arrives as byte 0x03, so handle it, clean up and exit 130. Handle SIGWINCH by re-querying the size and redrawing; double-buffer to avoid flicker; decode multi-byte arrow escape sequences; print the final choice after leaving the alt screen; skip the picker and fall back to flags or a clear error when stdin or stdout isn't a TTY; prefer a library (prompt_toolkit/Textual). Ideally it includes a short code skeleton.",
+      "files": []
+    }
+  ]
+}
