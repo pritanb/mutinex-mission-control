@@ -130,8 +130,40 @@ def test_owners_see_their_draft_missions_and_what_each_is_waiting_on(seeded_db):
     assert missions_of(seeded_db, NORA) == [
         ("Station Reboost", [("Engineer", 1)], 0, False),
         ("Asteroid Survey", [("Pilot", 1), ("Geologist", 1)], 0, False),
-        ("Lunar Surface Medical Study", [], 0, True),
+        ("Lunar Surface Medical Study", [], 0, False),
     ]
+
+
+def approvers_of(conn, actor):
+    """[(mission name, eligible approvers, approvals required)]."""
+    return [
+        (m.mission_name, m.eligible_approvers, m.approvals_required)
+        for m in box(conn, actor).missions
+    ]
+
+
+def test_s7_a_staffed_mission_without_enough_eligible_approvers_is_not_ready(seeded_db):
+    # Ruth created Medical Study and Marco is on it, so only Ingrid could approve; 2 are needed.
+    assert ("Lunar Surface Medical Study", 1, 2) in approvers_of(seeded_db, NORA)
+    medical = next(m for m in box(seeded_db, NORA).missions if m.mission_id == MEDICAL)
+    assert (medical.unfilled, medical.unanswered, medical.ready) == ((), 0, False)
+
+
+def test_a_mission_is_ready_once_enough_directors_could_approve_it(seeded_db):
+    seeded_db.execute("UPDATE organisations SET required_approvals = 1 WHERE id = 1")
+    assert ("Lunar Surface Medical Study", [], 0, True) in missions_of(seeded_db, NORA)
+    assert ("Lunar Surface Medical Study", 1, 1) in approvers_of(seeded_db, NORA)
+
+
+def test_every_draft_mission_carries_its_eligible_approvers(seeded_db):
+    # Nora created Station Reboost and Asteroid Survey and no Director is on either.
+    assert approvers_of(seeded_db, NORA) == [
+        ("Station Reboost", 3, 2),
+        ("Asteroid Survey", 3, 2),
+        ("Lunar Surface Medical Study", 1, 2),
+    ]
+    # Ruth created Gateway, leaving Marco and Ingrid.
+    assert approvers_of(seeded_db, LEE) == [("Lunar Gateway Resupply", 2, 2)]
 
 
 def test_active_finished_and_pending_missions_are_not_listed(seeded_db):

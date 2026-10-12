@@ -1,10 +1,12 @@
 """Crew profiles: list and view them, see someone's assignment history, and set skill levels."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
+from mission_control.cli.client import Api, ApiError
 from mission_control.cli.commands.common import Email, Json, command, group, start
+from mission_control.cli.errors import Refused
 from mission_control.cli.refusals import refusals
 from mission_control.cli.resolve import crew_by_email, skill_named
 from mission_control.cli.views import assignment_summary_rows, show_profile, skills_text
@@ -73,6 +75,17 @@ def history(ctx: typer.Context, email: Email, json_output: Json = False) -> None
     )
 
 
+def _skill(api: Api, name: str) -> dict[str, Any]:
+    """The skill, from the catalogue. Only Leads and Directors can read the catalogue, and only
+    they can change skill levels, so a refusal to read it is really a refusal to change them."""
+    try:
+        return skill_named(api, name)
+    except ApiError as error:
+        if error.code == "role_forbidden":
+            raise Refused("Only Mission Leads and Directors can change skill levels") from None
+        raise
+
+
 @command(app, "set-skill", example="mc crew set-skill ana@aurora.example Piloting 5")
 def set_skill(
     ctx: typer.Context,
@@ -84,8 +97,8 @@ def set_skill(
     """Set someone's level in a skill. Leads and Directors, never for themselves."""
     env = start(ctx, json_output)
     api = env.api()
+    found = _skill(api, skill)
     person = crew_by_email(api, email)
-    found = skill_named(api, skill)
     with refusals():
         result = api.put(
             f"/crew/{person['crew_profile_id']}/skills/{found['id']}", {"level": level}
@@ -101,7 +114,7 @@ def unset_skill(ctx: typer.Context, email: Email, skill: Skill) -> None:
     """Remove a skill from someone's profile. Leads and Directors, never for themselves."""
     env = start(ctx)
     api = env.api()
+    found = _skill(api, skill)
     person = crew_by_email(api, email)
-    found = skill_named(api, skill)
     api.delete(f"/crew/{person['crew_profile_id']}/skills/{found['id']}")
     env.term.ok(f"Removed {found['name']} from {person['name']}'s skills.")

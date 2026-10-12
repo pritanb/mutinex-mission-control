@@ -64,9 +64,20 @@ def test_401_wrong_password_is_invalid_credentials(client):
     assert error["message"] == "Email or password is incorrect"
 
 
-def test_401_comes_before_input_validation(client):
-    """An unauthenticated caller learns nothing about the endpoint's input."""
+def test_401_comes_before_checking_the_body_fields(client):
+    """A well-formed JSON body with wrong or missing fields gets 401, not 422: an
+    unauthenticated caller learns nothing about what the endpoint expects."""
     assert_error(client.post(f"{API}/missions", json={"name": 7}), 401, "unauthenticated")
+
+
+def test_malformed_json_is_refused_before_authentication(client):
+    """A body that isn't JSON at all is a 422 even without a token: FastAPI reads the body
+    before it runs the authentication dependency. It reveals nothing about the endpoint."""
+    response = client.post(
+        f"{API}/missions", headers={"Content-Type": "application/json"}, content=b"{not json"
+    )
+    error = assert_error(response, 422, "validation_error")
+    assert error["message"] == "The request body isn't valid JSON"
 
 
 # --- 403 ----------------------------------------------------------------------------------
@@ -102,6 +113,21 @@ def test_404_missing_record_is_not_found_with_problems(client, login):
 def test_404_unknown_route_uses_the_same_shape(client, login):
     error = assert_error(client.get(f"{API}/nowhere", headers=login("lee")), 404, "not_found")
     assert error["message"] == "Not found"
+
+
+# --- 405 ----------------------------------------------------------------------------------
+
+
+def test_405_wrong_method_uses_the_same_shape(client, login):
+    response = client.delete(f"{API}/missions", headers=login("lee"))
+    error = assert_error(response, 405, "method_not_allowed")
+    assert error["message"] == "Method Not Allowed"
+    assert error["problems"] == [
+        {"code": "method_not_allowed", "message": "Method Not Allowed", "refs": {}}
+    ]
+    # The Allow header is kept. Starlette fills it from the first route matching the path, so
+    # it names GET here even though POST /missions exists too.
+    assert "GET" in response.headers["allow"]
 
 
 # --- 409 ----------------------------------------------------------------------------------
@@ -242,7 +268,7 @@ def test_422_invalid_date_range_is_not_a_500(client, login):
         json={"start_date": "2027-07-10", "end_date": "2027-07-01", "reason": "Leave"},
     )
     error = assert_error(response, 422, "validation_error")
-    assert error["message"] == "End date 2027-07-01 is before start date 2027-07-10"
+    assert error["message"] == "The end date 2027-07-01 is before the start date 2027-07-10"
 
 
 def test_422_out_of_range_integer_is_refused_not_a_500(client, login):
@@ -277,6 +303,49 @@ def test_503_busy_when_the_write_lock_is_held(db_path, login):
             blocker.close()
     error = assert_error(response, 503, "busy")
     assert error["message"] == "The database is busy; try again"
+
+
+# --- 500 ----------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def broken_client(settings):
+    """The real app with one extra route that fails with an unexpected error, as a bug would.
+    The client returns the 500 response instead of re-raising the error into the test."""
+    app = create_app(settings)
+
+    @app.get(f"{API}/boom")
+    def boom() -> None:
+        raise ValueError("secret detail: /srv/db password=hunter2")
+
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+
+
+def test_500_unexpected_error_uses_the_same_shape_and_hides_the_details(broken_client, caplog):
+    with caplog.at_level("ERROR", logger="mission_control.api"):
+        response = broken_client.get(f"{API}/boom")
+    error = assert_error(response, 500, "internal_error")
+    assert error["message"] == "Something went wrong on the server"
+    assert error["problems"] == [
+        {"code": "internal_error", "message": "Something went wrong on the server", "refs": {}}
+    ]
+    assert "secret" not in response.text and "ValueError" not in response.text
+    assert "Traceback" not in response.text
+    logged = [r.getMessage() for r in caplog.records if r.name == "mission_control.api.errors"]
+    assert logged == ["Unhandled ValueError on GET /api/v1/boom"]
+
+
+def test_500_handler_leaves_expected_refusals_to_their_own_handlers(broken_client, login):
+    """Refusals, malformed input and unknown routes keep their own status and code."""
+    lee = login("lee")
+    assert_error(broken_client.get(f"{API}/missions/999", headers=lee), 404, "not_found")
+    assert_error(broken_client.get(f"{API}/missions/x", headers=lee), 422, "validation_error")
+    assert_error(broken_client.get(f"{API}/nowhere", headers=lee), 404, "not_found")
+    assert_error(broken_client.get(f"{API}/me"), 401, "unauthenticated")
+    response = broken_client.patch(f"{API}/missions/5", headers=lee, json={"name": "Renamed"})
+    assert_error(response, 409, "mission_frozen")
+    assert_error(broken_client.post(f"{API}/missions/5"), 405, "method_not_allowed")
 
 
 # --- Settings and startup -----------------------------------------------------------------

@@ -12,14 +12,14 @@ from mission_control.domain.records import (
     AssignmentFact,
     CandidateFacts,
     Commitment,
-    Requirement,
     RosterEntry,
     SlotSpec,
 )
-from mission_control.infra.repositories.base import FINAL, OPEN, Scoped, in_list, window
+from mission_control.infra.repositories.base import FINAL, OPEN, in_list, window
+from mission_control.infra.repositories.mission_slots import SlotRequirements
 
 
-class FactsRepo(Scoped):
+class FactsRepo(SlotRequirements):
     def slot_specs(self, mission_id: int) -> list[SlotSpec]:
         """Live slots in listed order. open_places = headcount minus open assignments."""
         open_statuses, open_params = in_list("o", OPEN)
@@ -33,33 +33,17 @@ class FactsRepo(Scoped):
             mission_id=mission_id,
             **open_params,
         )
-        reqs = self._requirements(mission_id)
+        reqs = self._requirements_by_slot(mission_id)
         return [
             SlotSpec(
                 r["id"],
                 r["position"],
                 r["name"],
                 r["headcount"] - r["open_count"],
-                tuple(reqs.get(r["id"], ())),
+                reqs.get(r["id"], ()),
             )
             for r in rows
         ]
-
-    def _requirements(self, mission_id: int) -> dict[int, list[Requirement]]:
-        rows = self._all(
-            """SELECT r.slot_id, r.skill_id, k.name, r.min_level FROM slot_requirements r
-               JOIN skills k ON k.org_id = r.org_id AND k.id = r.skill_id
-               JOIN slots s ON s.org_id = r.org_id AND s.id = r.slot_id
-               WHERE r.org_id = :org AND s.mission_id = :mission_id
-               ORDER BY r.slot_id, r.skill_id""",
-            mission_id=mission_id,
-        )
-        reqs: dict[int, list[Requirement]] = {}
-        for r in rows:
-            reqs.setdefault(r["slot_id"], []).append(
-                Requirement(r["skill_id"], r["name"], r["min_level"])
-            )
-        return reqs
 
     def candidates(
         self, excluding_mission_id: int | None, crew_profile_ids: Iterable[int] | None = None
@@ -208,9 +192,9 @@ class FactsRepo(Scoped):
         )
         result = []
         for r in rows:
-            reqs = self._requirements(r["mission_id"]).get(r["slot_id"], [])
+            reqs = self._requirements_by_slot(r["mission_id"]).get(r["slot_id"], ())
             result.append(
-                ActiveAssignment(r["mission_id"], r["mission_name"], r["slot_name"], tuple(reqs))
+                ActiveAssignment(r["mission_id"], r["mission_name"], r["slot_name"], reqs)
             )
         return result
 

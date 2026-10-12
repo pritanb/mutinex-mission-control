@@ -1,10 +1,15 @@
+import pytest
+
 from mission_control.domain.approvals import (
     Approver,
-    approver_problems,
     conflict_problems,
     count_eligible_approvers,
+    decision_problems,
     reaches_quorum,
 )
+from mission_control.domain.enums import Action, Role
+from mission_control.domain.errors import Forbidden
+from mission_control.domain.permissions import Actor, Context, authorize
 
 RUTH, MARCO, INGRID, LEE = 1, 2, 3, 4  # PRD §9.1 Aurora
 
@@ -21,47 +26,50 @@ DIRECTORS = [director(RUTH), director(MARCO), director(INGRID)]
 
 def test_eligible_director_has_no_problems():
     assert (
-        approver_problems(
-            director(MARCO), created_by_id=RUTH, rostered_user_ids=set(), decided_this_round=set()
+        decision_problems(
+            MARCO, created_by_id=RUTH, rostered_user_ids=set(), decided_this_round=set()
         )
         == []
     )
 
 
 def test_ac8_creator_cannot_approve():
-    [p] = approver_problems(
-        director(RUTH), created_by_id=RUTH, rostered_user_ids=set(), decided_this_round=set()
+    [p] = decision_problems(
+        RUTH, created_by_id=RUTH, rostered_user_ids=set(), decided_this_round=set()
     )
     assert p.code == "approver_is_creator"
 
 
 def test_ac11_rostered_director_cannot_approve():
-    [p] = approver_problems(
-        director(MARCO), created_by_id=RUTH, rostered_user_ids={MARCO}, decided_this_round=set()
+    [p] = decision_problems(
+        MARCO, created_by_id=RUTH, rostered_user_ids={MARCO}, decided_this_round=set()
     )
     assert p.code == "approver_is_rostered"
 
 
-def test_ac9_a_lead_cannot_approve():
-    lead = Approver(user_id=LEE, is_director=False, active=True)
-    [p] = approver_problems(
-        lead, created_by_id=RUTH, rostered_user_ids=set(), decided_this_round=set()
-    )
-    assert p.code == "role_forbidden"
+@pytest.mark.parametrize("action", [Action.APPROVE, Action.REJECT])
+@pytest.mark.parametrize("role", [Role.LEAD, Role.CREW])
+def test_ac9_only_directors_can_approve_or_reject(action, role):
+    # The role is a permission, checked before any of the decision problems.
+    actor = Actor(user_id=LEE, org_id=1, role=role, crew_profile_id=None)
+    about = Context(created_by_id=RUTH, rostered_user_ids=frozenset())
+    with pytest.raises(Forbidden) as refused:
+        authorize(actor, action, about)
+    assert refused.value.code == "role_forbidden"
 
 
 def test_ac10_a_director_cannot_decide_the_same_round_twice():
-    [p] = approver_problems(
-        director(MARCO), created_by_id=RUTH, rostered_user_ids=set(), decided_this_round={MARCO}
+    [p] = decision_problems(
+        MARCO, created_by_id=RUTH, rostered_user_ids=set(), decided_this_round={MARCO}
     )
     assert p.code == "already_decided"
 
 
-def test_every_approver_problem_is_reported_together():
+def test_every_decision_problem_is_reported_together():
     codes = {
         p.code
-        for p in approver_problems(
-            director(RUTH), created_by_id=RUTH, rostered_user_ids={RUTH}, decided_this_round={RUTH}
+        for p in decision_problems(
+            RUTH, created_by_id=RUTH, rostered_user_ids={RUTH}, decided_this_round={RUTH}
         )
     }
     assert codes == {"approver_is_creator", "approver_is_rostered", "already_decided"}
@@ -80,15 +88,32 @@ def test_conflict_problems_is_empty_for_an_unrelated_director():
     assert conflict_problems(MARCO, created_by_id=None, rostered_user_ids=set()) == []
 
 
-def test_approver_problems_keeps_its_order_and_messages():
-    problems = approver_problems(
-        director(RUTH), created_by_id=RUTH, rostered_user_ids={RUTH}, decided_this_round={RUTH}
+# --- Whether a Director can still decide this round (A2, A3; inbox and approve/reject) ------
+
+
+def test_an_unrelated_director_who_has_not_decided_can_still_decide():
+    problems = decision_problems(
+        MARCO, created_by_id=RUTH, rostered_user_ids={INGRID}, decided_this_round={INGRID}
     )
-    assert [p.message for p in problems] == [
-        "You can't approve a mission you created",
-        "You can't approve a mission you're on",
-        "You've already approved this round",
+    assert problems == []
+
+
+def test_decision_problems_cover_creator_roster_and_already_decided_in_order():
+    problems = decision_problems(
+        RUTH, created_by_id=RUTH, rostered_user_ids={RUTH}, decided_this_round={RUTH}
+    )
+    assert [(p.code, p.message) for p in problems] == [
+        ("approver_is_creator", "You can't approve a mission you created"),
+        ("approver_is_rostered", "You can't approve a mission you're on"),
+        ("already_decided", "You've already approved this round"),
     ]
+
+
+def test_a_director_who_already_approved_this_round_cannot_decide_again():
+    [p] = decision_problems(
+        MARCO, created_by_id=RUTH, rostered_user_ids=set(), decided_this_round={MARCO}
+    )
+    assert p.code == "already_decided"
 
 
 # --- Counting eligible approvers at submit (AC-12) ----------------------------------------

@@ -74,6 +74,34 @@ def test_wrong_password_and_unknown_email_get_the_same_refusal(db, email, passwo
     assert err.value.message == "Email or password is incorrect"
 
 
+def _service_locals(error):
+    """Every local variable value held by the application's frames in an exception's
+    traceback (the test's own frames are left out)."""
+    values = []
+    tb = error.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_globals.get("__name__", "").startswith("mission_control."):
+            values += [repr(v) for v in tb.tb_frame.f_locals.values()]
+        tb = tb.tb_next
+    return values
+
+
+@pytest.mark.parametrize("email", ["lee@aurora.example", "nobody@aurora.example"])
+def test_each_failed_login_raises_a_fresh_refusal_holding_no_other_attempts_password(db, email):
+    # Regression: one shared exception object kept every attempt's frames, and so every
+    # attempted plaintext password, in its growing traceback.
+    caught = []
+    for password in ("first wrong passphrase", "second wrong passphrase"):
+        with pytest.raises(Unauthenticated) as err:
+            login(db, email=email, password=password)
+        caught.append(err.value)
+    first, second = caught
+    assert first is not second
+    assert (first.code, first.message) == (second.code, second.message)
+    assert any("first wrong passphrase" in v for v in _service_locals(first))
+    assert not any("second wrong passphrase" in v for v in _service_locals(first))
+
+
 def test_ac26_deactivated_user_cannot_log_in(db):
     db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (LEE,))
     with pytest.raises(Unauthenticated) as err:

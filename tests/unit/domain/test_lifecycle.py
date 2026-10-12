@@ -311,7 +311,20 @@ def test_ac12_too_few_eligible_approvers_blocks_submission():
     marco = roster_entry(crew("Marco", 1, skills={EVA: 4}), s, id=1)
     [p] = check_submit([s], [marco], WINDOW, eligible_approvers=1, approvals_required=2)
     assert p.code == "insufficient_approvers"
-    assert "1" in p.message and "2" in p.message
+    assert p.message == "Only 1 Director can approve this mission; it needs 2"
+
+
+@pytest.mark.parametrize(
+    ("eligible", "required", "message"),
+    [
+        (0, 1, "No Director can approve this mission; it needs 1"),
+        (2, 3, "Only 2 Directors can approve this mission; it needs 3"),
+    ],
+)
+def test_ac12_insufficient_approvers_wording(eligible, required, message):
+    s = slot(EVA_3, id=1, position=1, name="Flight Surgeon", open_places=0)
+    [p] = check_submit([s], [], WINDOW, eligible_approvers=eligible, approvals_required=required)
+    assert p.message == message
 
 
 # Regression: refusal wording reads naturally

@@ -5,9 +5,11 @@ from typing import Annotated
 
 import typer
 
-from mission_control.cli.client import ApiError
+from mission_control.cli.client import ApiError, Unreachable
 from mission_control.cli.commands.common import Json, command, start
 from mission_control.cli.config import Credentials
+from mission_control.cli.env import Env
+from mission_control.cli.errors import UNAVAILABLE
 from mission_control.cli.prompts import ask, ask_new_secret, ask_secret
 from mission_control.cli.refusals import refusals
 from mission_control.cli.render import ROLE, Terminal, plural
@@ -46,6 +48,7 @@ def login(
     secret = ask_secret(env, "Password")
     with refusals():
         session = env.anonymous_api().post("/auth/login", {"email": email, "password": secret})
+    _end_previous_session(env)
     env.store.save(Credentials(session["token"], email, session.get("expires_at")))
     me = env.api().get("/me")
 
@@ -57,8 +60,22 @@ def login(
     env.term.next_steps(["mc inbox"])
 
 
+def _end_previous_session(env: Env) -> None:
+    """Logging in again replaces the saved session, so end the old one on the server rather than
+    leave it valid until it expires. Best effort: the new login has already worked."""
+    if env.store.load() is None:
+        return
+    try:
+        env.api().post("/auth/logout")
+    except (ApiError, Unreachable):
+        pass
+
+
 def logout(ctx: typer.Context) -> None:
-    """Log out and end this session on the server."""
+    """Log out and end this session on the server.
+
+    If the server can't be reached, the session is still removed from this computer.
+    """
     env = start(ctx)
     if env.store.load() is None:
         env.term.ok("You're not logged in.")
@@ -68,6 +85,13 @@ def logout(ctx: typer.Context) -> None:
     except ApiError as error:
         if error.status != 401:  # a session that already ended is as good as logged out
             raise
+    except Unreachable:
+        env.store.clear()
+        env.term.warn(
+            "Couldn't reach the server, so the session may stay valid until it expires. "
+            "Removed it from this computer."
+        )
+        raise typer.Exit(UNAVAILABLE) from None
     env.store.clear()
     env.term.ok("Logged out.")
 
@@ -87,7 +111,8 @@ def whoami(ctx: typer.Context, json_output: Json = False) -> None:
 def password(ctx: typer.Context) -> None:
     """Change your password. Asks for your current one, then the new one twice.
 
-    Every session ends afterwards, including this one, so log in again.
+    Without a terminal, pipe the current and new passwords on stdin, one per line. Every session
+    ends afterwards, including this one, so log in again.
     """
     env = start(ctx)
     api = env.api()
@@ -185,12 +210,14 @@ def _waiting_on(mission: dict) -> str:
     """What one of your draft missions needs before it can be submitted."""
     if mission["ready"]:
         return "Ready to submit"
-    parts = [
-        f"{s['slot_name']}: {plural(s['open_places'], 'place')} unfilled"
-        for s in mission["unfilled"]
-    ]
+    parts = []
+    if places := sum(s["open_places"] for s in mission["unfilled"]):
+        parts.append(f"{plural(places, 'place')} unfilled")
     if mission["unanswered"]:
         parts.append(f"{plural(mission['unanswered'], 'reply', 'replies')} awaited")
+    eligible, required = mission["eligible_approvers"], mission["approvals_required"]
+    if eligible < required:
+        parts.append(f"{plural(eligible, 'eligible approver')}, {required} required")
     return "; ".join(parts)
 
 

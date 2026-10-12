@@ -126,7 +126,9 @@ def test_ac27_another_organisations_mission_is_not_found_through_the_cli(as_):
 
 def test_ac26_deactivating_shows_in_the_user_list(as_):
     ruth = as_("ruth")
-    assert ruth("users", "deactivate", "hana@aurora.example").exit_code == 1  # still on Telescope
-    assert ruth("users", "deactivate", "fay@aurora.example").exit_code == 0
+    assert (
+        ruth("users", "deactivate", "hana@aurora.example", "--yes").exit_code == 1
+    )  # still on Telescope
+    assert ruth("users", "deactivate", "fay@aurora.example", "--yes").exit_code == 0
     listed = [line for line in ruth("users", "list").stdout.splitlines() if "Fay" in line]
     assert listed and listed[0].rstrip().endswith("deactivated")

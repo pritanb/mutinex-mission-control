@@ -8,32 +8,31 @@ from mission_control.domain.eligibility import DatesEdit
 from mission_control.domain.enums import Action, MissionStatus, Role
 from mission_control.domain.errors import Problem, RuleViolation
 from mission_control.domain.events import Event
-from mission_control.domain.lifecycle import StateConflict, mission_status_after, state_problem
+from mission_control.domain.lifecycle import mission_status_after, require_state
 from mission_control.domain.permissions import Context
+from mission_control.domain.wording import join_names
 from mission_control.services.context import (
     ServiceContext,
+    check,
     found,
     mission_context,
     visible_mission,
 )
+from mission_control.services.inputs import date_problems, invalid, invalid_input, refuse_input
 from mission_control.services.missions.inputs import (
     SlotInput,
-    date_problems,
-    invalid,
-    invalid_input,
     levels,
     name_problems,
-    refuse_input,
     requirement_data,
     slot_label,
     slot_problems,
 )
 from mission_control.services.missions.loading import open_for_edit, reload, resolve_skills
 from mission_control.services.missions.rules import (
-    join_names,
+    owner_problems,
     record_change,
     refuse_if_invalidated,
-    refuse_repeated_names,
+    repeated_name_problems,
     require_owner,
 )
 from mission_control.services.missions.views import MissionView, mission_view
@@ -72,8 +71,15 @@ def create_mission(
         if problems or owner is None:
             raise invalid_input(problems)
         window = DateRange(start, end)
-        refuse_repeated_names(slots)
-        require_owner(owner)
+        repeated = repeated_name_problems(slots)
+        problems = repeated + owner_problems(owner)
+        if len(problems) == 1:
+            message = problems[0].message
+        elif problems == repeated:
+            message = "Some slots share a name"
+        else:
+            message = f"{name.strip()} can't be created"
+        check(problems, message)
 
         mission = repos.missions.create(name.strip(), window, owner.id, ctx.actor.user_id)
         for s, reqs in zip(slots, requirements, strict=True):
@@ -156,7 +162,8 @@ def update_mission(
             mission,
             status,
             Event.MISSION_UPDATED,
-            {"mission_name": new_name, "changes": changes},
+            new_name,
+            {"changes": changes},
         )
         return mission_view(repos, reload(repos, mission))
 
@@ -167,9 +174,7 @@ def transfer_ownership(ctx: ServiceContext, mission_id: int, new_owner_id: int) 
     with ctx.write() as repos:
         mission = visible_mission(ctx, repos, mission_id)
         ctx.authorize(Action.TRANSFER, mission_context(repos, mission))
-        problem = state_problem(mission.status, Action.TRANSFER)
-        if problem is not None:
-            raise StateConflict(problem)
+        require_state(mission.status, Action.TRANSFER)
         new_owner = found(repos.users.get(new_owner_id), "User")
         if new_owner.id == mission.owner_id:
             raise RuleViolation.of(
@@ -190,12 +195,12 @@ def transfer_ownership(ctx: ServiceContext, mission_id: int, new_owner_id: int) 
             mission,
             status,
             Event.MISSION_TRANSFERRED,
+            mission.name,
             {
-                "mission_name": mission.name,
-                "from_owner_id": old_owner.id,
-                "from_owner_name": old_owner.name,
-                "to_owner_id": new_owner.id,
-                "to_owner_name": new_owner.name,
+                "changes": {
+                    "owner_id": [old_owner.id, new_owner.id],
+                    "owner_name": [old_owner.name, new_owner.name],
+                }
             },
         )
         return mission_view(repos, reload(repos, mission))

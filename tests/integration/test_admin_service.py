@@ -79,7 +79,7 @@ def test_a1_director_sets_the_required_approvals_and_it_is_audited(seeded_db):
     assert org.required_approvals == 3
     assert admin.view_organisation(ctx(seeded_db)).required_approvals == 3
     assert audit_events(seeded_db, start) == [
-        (1, "org.required_approvals_changed", None, {"from": 2, "to": 3}),
+        (1, "org.required_approvals_changed", None, {"changes": {"required_approvals": [2, 3]}}),
     ]
 
 
@@ -223,7 +223,7 @@ def test_p10_director_creates_a_user_who_can_log_in_with_the_initial_password(se
     )
     session = auth.login(seeded_db, "zoe@aurora.example", PASSPHRASE, now=NOW)
     assert session.user == user
-    stored = security.password_hash_of(seeded_db, user.id)
+    stored = security.password_hash_of(seeded_db, 1, user.id)
     assert stored.startswith("$argon2id$") and PASSPHRASE not in stored
 
 
@@ -300,6 +300,18 @@ def test_p10_names_and_emails_are_trimmed_and_blank_ones_rejected(seeded_db):
             admin.create_user(ctx(seeded_db), email, name, Role.CREW, PASSPHRASE)
 
 
+def test_p10_every_blank_value_is_listed_together(seeded_db):
+    before = snapshot(seeded_db)
+    with pytest.raises(InvalidInput) as err:
+        admin.create_user(ctx(seeded_db), " ", "  ", Role.CREW, PASSPHRASE)
+    assert err.value.message == "Some values aren't valid"
+    assert [(p.code, p.message) for p in err.value.problems] == [
+        ("validation_error", "The email address can't be blank"),
+        ("validation_error", "The name can't be blank"),
+    ]
+    assert snapshot(seeded_db) == before
+
+
 # --- Crew profiles on request (P9) --------------------------------------------------------
 
 
@@ -365,8 +377,7 @@ def test_p9_changing_someone_to_crew_gives_them_a_profile_if_missing(seeded_db):
             {
                 "user_id": INGRID,
                 "user_name": "Ingrid Holm",
-                "from_role": "director",
-                "to_role": "crew",
+                "changes": {"role": ["director", "crew"]},
             },
         ),
         (
@@ -485,7 +496,11 @@ def test_p9_a_role_change_is_audited_with_names(seeded_db):
             1,
             "user.role_changed",
             None,
-            {"user_id": FAY, "user_name": "Fay Moreau", "from_role": "crew", "to_role": "lead"},
+            {
+                "user_id": FAY,
+                "user_name": "Fay Moreau",
+                "changes": {"role": ["crew", "lead"]},
+            },
         ),
     ]
 
@@ -712,22 +727,35 @@ def test_p1_renaming_a_skill_keeps_its_identity(seeded_db):
             None,
             {
                 "skill_id": SYS_ENG,
-                "from_name": "Systems Engineering",
-                "to_name": "Systems Eng",
-                "from_category": None,
-                "to_category": None,
+                "skill_name": "Systems Eng",
+                "changes": {"name": ["Systems Engineering", "Systems Eng"]},
             },
         ),
     ]
 
 
 def test_p1_recategorising_a_skill_keeps_its_name_unless_one_is_given(seeded_db):
+    start = last_audit_id(seeded_db)
     skill = admin.update_skill(ctx(seeded_db), GEOLOGY, category="Science")
     assert (skill.name, skill.category) == ("Geology", "Science")
     skill = admin.update_skill(ctx(seeded_db), GEOLOGY, name="Planetary Geology")
     assert (skill.name, skill.category) == ("Planetary Geology", "Science")
     skill = admin.update_skill(ctx(seeded_db), GEOLOGY, category=None)
     assert (skill.name, skill.category) == ("Planetary Geology", None)
+    # Each audit event lists only what changed, as [old, new].
+    assert [data for _, _, _, data in audit_events(seeded_db, start)] == [
+        {"skill_id": GEOLOGY, "skill_name": "Geology", "changes": {"category": [None, "Science"]}},
+        {
+            "skill_id": GEOLOGY,
+            "skill_name": "Planetary Geology",
+            "changes": {"name": ["Geology", "Planetary Geology"]},
+        },
+        {
+            "skill_id": GEOLOGY,
+            "skill_name": "Planetary Geology",
+            "changes": {"category": ["Science", None]},
+        },
+    ]
 
 
 def test_p1_renaming_to_another_skills_name_is_refused(seeded_db):
@@ -755,6 +783,26 @@ def test_p1_a_blank_skill_name_is_rejected(seeded_db):
         admin.add_skill(ctx(seeded_db), "   ")
     with pytest.raises(InvalidInput):
         admin.update_skill(ctx(seeded_db), GEOLOGY, name="")
+
+
+@pytest.mark.parametrize(
+    ("actor", "skill_id"), [(RUTH, 999), (SAM, GEOLOGY)], ids=["missing", "other org"]
+)
+def test_ac29_a_skill_is_looked_up_before_its_new_name_is_checked(seeded_db, actor, skill_id):
+    before = snapshot(seeded_db)
+    with pytest.raises(NotFound):
+        admin.update_skill(ctx(seeded_db, actor), skill_id, name="  ")
+    assert snapshot(seeded_db) == before
+
+
+@pytest.mark.parametrize(
+    ("actor", "user_id"), [(RUTH, 999), (SAM, LEE_ID)], ids=["missing", "other org"]
+)
+def test_ac29_a_user_is_looked_up_before_the_display_name_is_checked(seeded_db, actor, user_id):
+    before = snapshot(seeded_db)
+    with pytest.raises(NotFound):
+        admin.create_crew_profile(ctx(seeded_db, actor), user_id, display_name="  ")
+    assert snapshot(seeded_db) == before
 
 
 def test_p1_an_unused_skill_can_be_deleted(seeded_db):

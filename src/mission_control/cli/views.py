@@ -3,11 +3,15 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from mission_control.cli.render import MISSION_STATUS, ROLE, Terminal
+from mission_control.cli.render import ASSIGNMENT_STATUS, MISSION_STATUS, ROLE, Terminal
 
 
 def mission_status(mission: Mapping[str, Any]) -> str:
     return MISSION_STATUS.get(mission["status"], mission["status"])
+
+
+def assignment_status(assignment: Mapping[str, Any]) -> str:
+    return ASSIGNMENT_STATUS.get(assignment["status"], assignment["status"])
 
 
 def mission_heading(term: Terminal, mission: Mapping[str, Any]) -> str:
@@ -57,7 +61,7 @@ def assignment_summary_rows(term: Terminal, rows: Sequence[Mapping[str, Any]]) -
             a["mission_name"],
             a["slot_name"],
             term.dates(a["start_date"], a["end_date"]),
-            a["status"],
+            assignment_status(a),
         ]
         for a in rows
     ]

@@ -1,6 +1,6 @@
 """Who can fill a slot, how loaded they are, and which edits would break existing assignments."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from mission_control.domain.dates import DateRange
@@ -10,10 +10,12 @@ from mission_control.domain.records import (
     ActiveAssignment,
     AssignmentFact,
     CandidateFacts,
+    Commitment,
     Requirement,
     RosterEntry,
     SlotSpec,
 )
+from mission_control.domain.wording import join_names
 
 
 def _span(window: DateRange) -> str:
@@ -51,18 +53,21 @@ def _availability_conflicts(
             )
     for other in person.accepted_elsewhere:
         if other.window.overlaps(window):
-            shared = DateRange(
-                max(other.window.start, window.start), min(other.window.end, window.end)
-            )
-            problems.append(
-                Problem(
-                    "overlap",
-                    f"{person.name} has an accepted assignment on {other.mission_name} "
-                    f"overlapping {_span(shared)}",
-                    {**ref, "mission_id": other.mission_id, "mission_name": other.mission_name},
-                )
-            )
+            problems.append(overlap_problem(person.name, other, window, ref))
     return problems
+
+
+def overlap_problem(
+    name: str, other: Commitment, window: DateRange, refs: Mapping[str, int | str]
+) -> Problem:
+    """`name` has an accepted assignment on another mission whose dates overlap `window`. The
+    message names the days they share; `refs` gain the other mission."""
+    shared = DateRange(max(other.window.start, window.start), min(other.window.end, window.end))
+    return Problem(
+        "overlap",
+        f"{name} has an accepted assignment on {other.mission_name} overlapping {_span(shared)}",
+        {**refs, "mission_id": other.mission_id, "mission_name": other.mission_name},
+    )
 
 
 def _skill_shortfalls(
@@ -145,7 +150,7 @@ def invalidated_by(edit: MissionEditKind, roster: Sequence[RosterEntry]) -> list
 
     problems: list[Problem] = []
     if edit.headcount is not None and edit.headcount < len(in_slot):
-        names = _join_names([e.crew.name for e in in_slot])
+        names = join_names(e.crew.name for e in in_slot)
         problems.append(
             Problem(
                 "headcount_below_open_assignments",
@@ -163,10 +168,6 @@ def invalidated_by(edit: MissionEditKind, roster: Sequence[RosterEntry]) -> list
                 _in_slot(e, p) for p in _skill_shortfalls(e.crew, edit.requirements, _refs(e))
             )
     return problems
-
-
-def _join_names(names: list[str]) -> str:
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def _refs(e: RosterEntry) -> dict[str, int | str]:

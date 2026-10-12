@@ -24,13 +24,19 @@ from mission_control.services.missions.inputs import SlotInput
 
 def require_owner(user: User) -> None:
     """Only an active Mission Lead can own a mission."""
+    for problem in owner_problems(user):
+        raise RuleViolation.of(problem)
+
+
+def owner_problems(user: User) -> list[Problem]:
+    """Why the user can't own a mission, if they can't: only an active Mission Lead can."""
     if user.role != Role.LEAD:
         message = f"{user.name} can't own a mission: only Mission Leads can"
     elif not user.is_active:
         message = f"{user.name} can't own a mission because they're deactivated"
     else:
-        return
-    raise RuleViolation(message, [Problem("owner_not_active_lead", message, {"user_id": user.id})])
+        return []
+    return [Problem("owner_not_active_lead", message, {"user_id": user.id})]
 
 
 def refuse_taken_name(
@@ -42,12 +48,18 @@ def refuse_taken_name(
         (s for s in slots if s.id != slot_id and _name_key(s.name) == _name_key(name)), None
     )
     if taken is not None:
-        message = f"{mission.name} already has a slot called {taken.name}"
-        raise RuleViolation(message, [Problem("already_exists", message, {"slot_id": taken.id})])
+        raise RuleViolation.of(
+            Problem(
+                "already_exists",
+                f"{mission.name} already has a slot called {taken.name}",
+                {"slot_id": taken.id},
+            )
+        )
 
 
-def refuse_repeated_names(slots: Sequence[SlotInput]) -> None:
-    """A new mission's slots have different names, ignoring case. Every repeated name is listed."""
+def repeated_name_problems(slots: Sequence[SlotInput]) -> list[Problem]:
+    """A new mission's slots have different names, ignoring case. One problem per repeated
+    name."""
     first_spelling: dict[str, str] = {}
     repeated: list[str] = []
     for s in slots:
@@ -56,12 +68,7 @@ def refuse_repeated_names(slots: Sequence[SlotInput]) -> None:
             first_spelling[key] = s.name.strip()
         elif first_spelling[key] not in repeated:
             repeated.append(first_spelling[key])
-    problems = [
-        Problem("already_exists", f"More than one slot is called {name}") for name in repeated
-    ]
-    if problems:
-        message = problems[0].message if len(problems) == 1 else "Some slots share a name"
-        raise RuleViolation(message, problems)
+    return [Problem("already_exists", f"More than one slot is called {name}") for name in repeated]
 
 
 def _name_key(name: str) -> str:
@@ -86,19 +93,31 @@ def refuse_if_invalidated(
     `before` describes the mission as it is now, in the same terms as `edit`. Conflicts it
     already has don't count, so the edit is refused only for people it would make no longer
     eligible."""
+    problems, names = invalidated(repos, mission, edit, before=before)
+    if problems:
+        raise RuleViolation(message(names), problems)
+
+
+def invalidated(
+    repos: Repos,
+    mission: Mission,
+    edit: MissionEditKind,
+    *,
+    before: MissionEditKind | None = None,
+) -> tuple[list[Problem], list[str]]:
+    """The open assignments the edit would break, and the names of everyone affected in roster
+    order. Both are empty if the edit is safe. `before` is as for `refuse_if_invalidated`."""
     roster = repos.facts.roster(mission.id)
     problems = invalidated_by(edit, roster)
     if before is not None and problems:
         existing = {_conflict(p) for p in invalidated_by(before, roster)}
         problems = [p for p in problems if _conflict(p) not in existing]
-    if not problems:
-        return
     names = {e.crew.crew_profile_id: e.crew.name for e in roster}
     affected: list[int] = []
     for p in problems:
         ids = p.refs.get("crew_profile_ids") or [p.refs["crew_profile_id"]]
         affected += [i for i in ids if isinstance(i, int) and i not in affected]
-    raise RuleViolation(message([names[i] for i in affected]), problems)
+    return problems, [names[i] for i in affected]
 
 
 # What identifies a conflict's cause, so the same conflict is recognised before and after an
@@ -128,21 +147,12 @@ def record_change(
     mission: Mission,
     status: MissionStatus,
     event: Event,
+    mission_name: str,
     data: Mapping[str, object],
 ) -> None:
     """Apply the status `touch_for_change` (or the transfer rule) gave, then audit the change
-    and, if a Pending mission went back to Draft, that return with its cause."""
-    ctx.audit(event, mission_id=mission.id, data=data)
+    and, if a Pending mission went back to Draft, that return with its cause. `mission_name` is
+    the mission's name once the change is made; the audit `data` starts with it."""
+    ctx.audit(event, mission_id=mission.id, data={"mission_name": mission_name, **data})
     if status != mission.status:
-        return_to_draft(ctx, repos, mission, event, str(data["mission_name"]))
-
-
-# Wording
-
-
-def join_names(names: Sequence[str]) -> str:
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-
-
-def is_are(names: Sequence[str]) -> str:
-    return "is" if len(names) == 1 else "are"
+        return_to_draft(ctx, repos, mission, event, mission_name)

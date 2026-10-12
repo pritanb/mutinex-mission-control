@@ -2,7 +2,7 @@
 through submission, approval, completion or cancellation."""
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from typing import Annotated, Any
 
@@ -33,7 +33,12 @@ from mission_control.cli.resolve import (
     slot_in,
     user_by_email,
 )
-from mission_control.cli.views import mission_heading, mission_row, requirements_text
+from mission_control.cli.views import (
+    assignment_status,
+    mission_heading,
+    mission_row,
+    requirements_text,
+)
 
 app = group("Create, crew and run missions.")
 slot_app = group("Add, change or remove a mission's slots.")
@@ -104,16 +109,53 @@ def _invalidated_hints(mission_id: int) -> dict[str, str]:
     }
 
 
-def _confirm_if_pending(env: Env, mission: dict[str, Any], doing: str, yes: bool) -> bool:
+def _is_owner(me: dict[str, Any], mission: dict[str, Any]) -> bool:
+    return me["id"] == mission["owner_id"]
+
+
+def _is_director(me: dict[str, Any], mission: dict[str, Any]) -> bool:
+    return me["role"] == "director"
+
+
+def _is_owner_or_director(me: dict[str, Any], mission: dict[str, Any]) -> bool:
+    return _is_owner(me, mission) or _is_director(me, mission)
+
+
+Allowed = Callable[[dict[str, Any], dict[str, Any]], bool]
+
+
+def _confirm(
+    env: Env,
+    api: Api,
+    mission: dict[str, Any],
+    warning: str,
+    yes: bool,
+    allowed: Allowed,
+    question: str = "Continue?",
+) -> None:
+    """Ask before a change that can't easily be undone, but only someone the server will let make
+    it: anyone else just sends the request and sees the server's refusal."""
+    if yes or not allowed(api.get("/me"), mission):
+        return
+    confirm(env, warning, yes=False, question=question)
+
+
+def _confirm_if_pending(
+    env: Env,
+    api: Api,
+    mission: dict[str, Any],
+    doing: str,
+    yes: bool,
+    allowed: Allowed = _is_owner,
+) -> bool:
     """Ask before a change that sends a pending mission back to Draft. True if it was pending."""
     if mission["status"] != "pending_approval":
         return False
-    confirm(
-        env,
+    warning = (
         f"{mission['name']} is pending approval. {doing} sends it back to Draft and clears its "
-        "approvals.",
-        yes=yes,
+        "approvals."
     )
+    _confirm(env, api, mission, warning, yes, allowed)
     return True
 
 
@@ -228,6 +270,9 @@ def _show_mission(term: Terminal, mission: dict[str, Any]) -> None:
     if mission.get("created_by_name") and mission.get("created_by_id") != mission.get("owner_id"):
         owner = term.heading(owner, f"created by {mission['created_by_name']}")
     term.line(owner)
+    rejection = mission.get("rejection")
+    if rejection:
+        term.line(f"Rejected by {rejection['director_name']}: {rejection['reason']}")
     term.line()
     term.table(
         ["#", "Slot", "Requires", "Places"],
@@ -246,7 +291,7 @@ def _show_mission(term: Terminal, mission: dict[str, Any]) -> None:
     if crew:
         term.table(
             ["Assignment", "Crew", "Slot", "Status"],
-            [[str(a["id"]), a["crew_name"], a["slot_name"], a["status"]] for a in crew],
+            [[str(a["id"]), a["crew_name"], a["slot_name"], assignment_status(a)] for a in crew],
         )
     else:
         term.line("No crew proposed yet.")
@@ -270,7 +315,7 @@ _EVENTS: dict[str, tuple[str, str]] = {
     "mission.activated": ("Mission became active", "Mission became active"),
     "mission.completed": ("Completed", "Completed"),
     "mission.cancelled": ("Cancelled", "Cancelled"),
-    "mission.transferred": ("Handed the mission to {to_owner_name}", "Changed the owner"),
+    "mission.transferred": ("Handed the mission to {changes[owner_name][1]}", "Changed the owner"),
     "mission.returned_to_draft": ("Mission went back to Draft", "Mission went back to Draft"),
     "slot.added": ("Added slot {slot_name}", "Added a slot"),
     "slot.updated": ("Changed slot {slot_name}", "Changed a slot"),
@@ -290,7 +335,7 @@ def _event_text(entry: dict[str, Any]) -> str:
     named, plain = _EVENTS.get(entry["event"], (entry["event"], entry["event"]))
     try:
         return named.format_map(entry.get("data") or {})
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError):
         return plain
 
 
@@ -346,7 +391,7 @@ def edit(
     api = env.api()
     with _refusals(mission_id, **_invalidated_hints(mission_id)):
         mission = api.get(f"/missions/{mission_id}")
-        was_pending = _confirm_if_pending(env, mission, "Editing it", yes)
+        was_pending = _confirm_if_pending(env, api, mission, "Editing it", yes)
         updated = api.patch(f"/missions/{mission_id}", body)
     _done(env, json_output, updated, f"Updated {updated['name']}.{_back(was_pending)}")
 
@@ -366,7 +411,7 @@ def add_slot(
     with _refusals(mission_id):
         mission = api.get(f"/missions/{mission_id}")
         body = _slot_body(api, [spec])[0]
-        was_pending = _confirm_if_pending(env, mission, "Adding a slot", yes)
+        was_pending = _confirm_if_pending(env, api, mission, "Adding a slot", yes)
         updated = api.post(f"/missions/{mission_id}/slots", body)
     _done(
         env, json_output, updated, f"Added {body['name']} to {mission['name']}.{_back(was_pending)}"
@@ -405,7 +450,7 @@ def edit_slot(
         if requirements is not None:
             ids = skill_ids(api, [n for n, _ in requirements])
             body["requirements"] = requirement_body(requirements, ids)
-        was_pending = _confirm_if_pending(env, mission, "Changing a slot", yes)
+        was_pending = _confirm_if_pending(env, api, mission, "Changing a slot", yes)
         updated = api.patch(f"/missions/{mission_id}/slots/{target['id']}", body)
     _done(
         env,
@@ -429,7 +474,7 @@ def remove_slot(
     with _refusals(mission_id, **_invalidated_hints(mission_id)):
         mission = api.get(f"/missions/{mission_id}")
         target = slot_in(mission, slot)
-        was_pending = _confirm_if_pending(env, mission, "Removing a slot", yes)
+        was_pending = _confirm_if_pending(env, api, mission, "Removing a slot", yes)
         updated = api.delete(f"/missions/{mission_id}/slots/{target['id']}")
     _done(
         env,
@@ -605,7 +650,7 @@ def propose(
         mission = api.get(f"/missions/{mission_id}")
         target = slot_in(mission, slot)
         person = crew_by_email(api, crew)
-        was_pending = _confirm_if_pending(env, mission, "Proposing crew", yes)
+        was_pending = _confirm_if_pending(env, api, mission, "Proposing crew", yes)
         assignment = api.post(
             f"/missions/{mission_id}/assignments",
             {"slot_id": target["id"], "crew_profile_id": person["crew_profile_id"]},
@@ -640,7 +685,7 @@ def remove_crew(
                 f"Assignment {assignment_id} isn't on {mission['name']}",
                 hint=f"See its crew: mc missions show {mission_id}",
             )
-        was_pending = _confirm_if_pending(env, mission, "Removing crew", yes)
+        was_pending = _confirm_if_pending(env, api, mission, "Removing crew", yes)
         result = api.post(f"/assignments/{assignment_id}/remove")
     _done(
         env,
@@ -709,7 +754,9 @@ def transfer(
     with _refusals(mission_id):
         new_owner = user_by_email(api, owner)
         mission = api.get(f"/missions/{mission_id}")
-        was_pending = _confirm_if_pending(env, mission, "Changing the owner", yes)
+        was_pending = _confirm_if_pending(
+            env, api, mission, "Changing the owner", yes, _is_director
+        )
         updated = api.post(f"/missions/{mission_id}/owner", {"owner_id": new_owner["id"]})
     _done(
         env,
@@ -746,12 +793,18 @@ def cancel(
     api = env.api()
     with _refusals(mission_id):
         mission = api.get(f"/missions/{mission_id}")
-        confirm(
+        _confirm(
             env,
+            api,
+            mission,
             f"Cancelling {mission['name']} can't be undone. Its open assignments will be "
             "cancelled too.",
-            yes=yes,
+            yes,
+            _is_owner_or_director,
             question=f"Cancel {mission['name']}?",
         )
         cancelled = api.post(f"/missions/{mission_id}/cancel", {"reason": reason})
-    _done(env, json_output, cancelled, f"Cancelled {cancelled['name']}.")
+    # A mission is cancelled once, so every cancelled assignment was cancelled just now.
+    ended = sum(1 for a in cancelled.get("assignments") or [] if a["status"] == "cancelled")
+    also = f" and its {plural(ended, 'open assignment')}" if ended else ""
+    _done(env, json_output, cancelled, f"Cancelled {cancelled['name']}{also}.")

@@ -138,7 +138,7 @@ def test_s7_submit_is_refused_with_too_few_eligible_approvers(seeded_db):
     with pytest.raises(RuleViolation) as caught:
         approvals.submit(as_(seeded_db, NORA), MEDICAL)
     assert problems_of(caught.value) == [
-        ("insufficient_approvers", "1 eligible approver, 2 required")
+        ("insufficient_approvers", "Only 1 Director can approve this mission; it needs 2")
     ]
     assert snapshot(seeded_db) == before
 
@@ -157,7 +157,7 @@ def test_ac12_deactivated_directors_are_not_eligible_approvers(seeded_db):
     with pytest.raises(RuleViolation) as caught:
         approvals.submit(as_(seeded_db, LEE), GATEWAY)
     assert problems_of(caught.value) == [
-        ("insufficient_approvers", "1 eligible approver, 2 required")
+        ("insufficient_approvers", "Only 1 Director can approve this mission; it needs 2")
     ]
 
 
@@ -412,3 +412,14 @@ def test_s1_submit_then_marco_and_ingrid_approve(seeded_db):
         MissionStatus.PENDING_APPROVAL
     )
     assert approvals.approve(as_(seeded_db, INGRID), GATEWAY).mission.status == MissionStatus.ACTIVE
+
+
+def test_a_rejected_mission_shows_who_rejected_it_and_why_until_resubmitted(seeded_db):
+    assert get_mission(as_(seeded_db, NORA), DEEP_SPACE).rejection is None
+    approvals.reject(as_(seeded_db, INGRID), DEEP_SPACE, "Budget not signed off")
+
+    rejection = get_mission(as_(seeded_db, NORA), DEEP_SPACE).rejection
+    assert (rejection.director_name, rejection.reason) == ("Ingrid Holm", "Budget not signed off")
+
+    approvals.submit(as_(seeded_db, NORA), DEEP_SPACE)
+    assert get_mission(as_(seeded_db, NORA), DEEP_SPACE).rejection is None

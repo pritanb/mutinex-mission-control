@@ -496,3 +496,29 @@ def test_t3_names_and_emails_are_trimmed(admin, db_path):
     assert result.exit_code == 0, result.stderr
     assert query(db_path, "SELECT name FROM organisations") == [("Orion Labs",)]
     assert query(db_path, "SELECT email, name FROM users") == [("zoe@orion.example", "Zoe Lin")]
+
+
+# --- Next steps ---------------------------------------------------------------------------
+
+
+def next_steps(result):
+    """The commands after "Next:" on stderr, one per line."""
+    lines = result.stderr.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("Next:"))
+    return [line.removeprefix("Next:").strip() for line in lines[start:]]
+
+
+def test_m17_next_steps_are_commands_to_run_with_uv_run(admin):
+    assert next_steps(admin("init-db")) == [
+        "uv run mc-admin seed",
+        "uv run mc-admin create-org --help",
+    ]
+    assert next_steps(admin("seed", "--reset")) == [
+        "uv run mc-server",
+        "uv run mc login --email lee@aurora.example",
+    ]
+    assert next_steps(create_orion(admin)) == [
+        "uv run mc login --email zoe@orion.example",
+        "uv run mc skills add NAME",
+        "uv run mc users add --email EMAIL --name NAME --role lead",
+    ]

@@ -6,8 +6,8 @@ from typing import Annotated
 
 import typer
 
-from mission_control.cli.commands.common import Email, Json, command, group, start
-from mission_control.cli.prompts import ask_new_secret
+from mission_control.cli.commands.common import Email, Json, Yes, command, group, start
+from mission_control.cli.prompts import ask_new_secret, confirm
 from mission_control.cli.render import ROLE, plural
 from mission_control.cli.resolve import skill_named, user_by_email
 
@@ -73,7 +73,10 @@ def add_user(
     ],
     json_output: Json = False,
 ) -> None:
-    """Add a user. You set their initial password, asked for twice with the input hidden."""
+    """Add a user. You set their initial password, asked for twice with the input hidden.
+
+    Without a terminal, pipe the password on stdin.
+    """
     env = start(ctx, json_output)
     api = env.api()
     secret = ask_new_secret(
@@ -89,7 +92,8 @@ def add_user(
         env.term.json(user)
         return
     env.term.ok(f"Added {user['name']} ({user['email']}) as {_a(user['role'])}.")
-    env.term.next_steps([f"They log in with: mc login --email {user['email']}"])
+    first_name = (user["name"].split() or [user["name"]])[0]
+    env.term.next_steps([f"mc login --email {user['email']}    (for {first_name})"])
 
 
 @command(users_app, "set-role", example="mc users set-role nora@aurora.example director")
@@ -106,11 +110,22 @@ def set_role(ctx: typer.Context, email: Email, role: RoleArg, json_output: Json 
 
 
 @command(users_app, "deactivate", example="mc users deactivate chen@aurora.example")
-def deactivate(ctx: typer.Context, email: Email, json_output: Json = False) -> None:
-    """Deactivate someone. They can't log in, and their history stays."""
+def deactivate(
+    ctx: typer.Context, email: Email, yes: Yes = False, json_output: Json = False
+) -> None:
+    """Deactivate someone. They can't log in any more, and their history stays.
+
+    It can't be undone, so you're asked first. --yes skips the question.
+    """
     env = start(ctx, json_output)
     api = env.api()
     user = user_by_email(api, email)
+    confirm(
+        env,
+        f"Deactivating {user['name']} can't be undone: they won't be able to log in.",
+        yes=yes,
+        question=f"Deactivate {user['name']}?",
+    )
     updated = api.patch(f"/users/{user['id']}", {"active": False})
     if json_output:
         env.term.json(updated)

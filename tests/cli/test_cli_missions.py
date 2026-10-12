@@ -4,7 +4,7 @@ or cancelling, and what each command reports (design §8; PRD M1–M7, C4)."""
 
 import json
 
-from cli_fakes import CREW, SKILLS, USERS, error, gateway, ok, problem
+from cli_fakes import CREW, LEE_ME, SKILLS, USERS, error, gateway, ok, problem, summary
 
 NEW_MISSION = gateway() | {"id": 8, "name": "Europa Flyby", "start_date": "2027-09-01",
                            "end_date": "2027-09-20"}  # fmt: skip
@@ -139,10 +139,10 @@ def test_m16_list_missions_as_a_table(mc, api):
         "/missions",
         ok(
             [
-                gateway(),
-                gateway("pending_approval") | {"id": 6, "name": "Deep Space Comms Upgrade",
+                summary(gateway()),
+                summary(gateway("pending_approval") | {"id": 6, "name": "Deep Space Comms Upgrade",
                                                "start_date": "2027-04-01", "end_date": "2027-04-20",
-                                               "owner_name": "Nora Quinn"},
+                                               "owner_id": 5, "owner_name": "Nora Quinn"}),
             ]
         ),
     )  # fmt: skip
@@ -195,10 +195,33 @@ def test_m16_show_mission_lists_slots_crew_and_approvals(mc, api):
         "  3   Commander            Piloting>=4, Leadership>=3   1 of 1 open\n"
         "\n"
         "  Assignment   Crew      Slot              Status\n"
-        "  21           Chen Wu   Flight Engineer   accepted\n"
+        "  21           Chen Wu   Flight Engineer   Accepted\n"
         "\n"
         "Approvals: 1 of 2 (Marco Bianchi)\n"
     )
+
+
+def test_show_says_who_rejected_a_mission_and_why(mc, api):
+    mc.login_as()
+    mission = gateway() | {
+        "approval_round": 1,
+        "rejection": {
+            "director_id": 3,
+            "director_name": "Ingrid Holm",
+            "decision": "reject",
+            "reason": "Budget not signed off",
+        },
+    }
+    api.on("GET", "/missions/1", ok(mission))
+
+    result = mc("missions", "show", "1")
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[:3] == [
+        "Lunar Gateway Resupply · 1–10 Mar 2027 · Draft",
+        "Owner Lee Park · created by Ruth Adeyemi",
+        "Rejected by Ingrid Holm: Budget not signed off",
+    ]
 
 
 def test_v1_history_shows_who_did_what_and_when(mc, api):
@@ -210,11 +233,12 @@ def test_v1_history_shows_who_did_what_and_when(mc, api):
             [
                 {"id": 1, "created_at": "2027-01-02T10:00:00.000Z", "actor_id": 5,
                  "actor_name": "Nora Quinn", "event": "mission.submitted",
-                 "from_status": "draft", "to_status": "pending_approval", "reason": None,
-                 "data": {}},
+                 "assignment_id": None, "crew_profile_id": None, "from_status": "draft",
+                 "to_status": "pending_approval", "reason": None, "data": {}},
                 {"id": 2, "created_at": "2027-01-03T11:30:00.000Z", "actor_id": 7,
                  "actor_name": "Ben Ito", "event": "assignment.withdrawn",
-                 "from_status": "accepted", "to_status": "withdrawn", "reason": "Family matter",
+                 "assignment_id": 31, "crew_profile_id": 7, "from_status": "accepted",
+                 "to_status": "withdrawn", "reason": "Family matter",
                  "data": {"slot_name": "Engineer", "crew_name": "Ben Ito"}},
             ]
         ),
@@ -230,11 +254,38 @@ def test_v1_history_shows_who_did_what_and_when(mc, api):
     )
 
 
+def test_v1_history_names_the_new_owner_from_the_changes_in_a_transfer(mc, api):
+    mc.login_as()
+
+    def entry(id, data):
+        return {"id": id, "created_at": "2027-01-02T10:00:00.000Z", "actor_id": 1,
+                "actor_name": "Ruth Adeyemi", "event": "mission.transferred",
+                "assignment_id": None, "crew_profile_id": None, "from_status": None,
+                "to_status": None, "reason": None, "data": data}  # fmt: skip
+
+    changes = {"owner_id": [4, 5], "owner_name": ["Lee Park", "Nora Quinn"]}
+    api.on(
+        "GET",
+        "/missions/1/history",
+        ok([entry(1, {"mission_name": "Gateway", "changes": changes}), entry(2, {})]),
+    )
+
+    result = mc("missions", "history", "1")
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "  When (UTC)         Who            What\n"
+        "  2 Jan 2027 10:00   Ruth Adeyemi   Handed the mission to Nora Quinn\n"
+        "  2 Jan 2027 10:00   Ruth Adeyemi   Changed the owner\n"
+    )
+
+
 # Confirmations (C4)
 
 
 def test_c4_editing_a_pending_mission_asks_first_and_yes_changes_it(mc, api):
     mc.login_as()
+    api.on("GET", "/me", ok(LEE_ME))
     api.on("GET", "/missions/1", ok(gateway("pending_approval")))
     api.on("PATCH", "/missions/1", ok(gateway()))
 
@@ -252,6 +303,7 @@ def test_c4_editing_a_pending_mission_asks_first_and_yes_changes_it(mc, api):
 
 def test_c4_declining_the_prompt_changes_nothing(mc, api):
     mc.login_as()
+    api.on("GET", "/me", ok(LEE_ME))
     api.on("GET", "/missions/1", ok(gateway("pending_approval")))
 
     result = mc("missions", "edit", "1", "--name", "New", answers=["n"])
@@ -263,6 +315,7 @@ def test_c4_declining_the_prompt_changes_nothing(mc, api):
 
 def test_c4_without_a_terminal_the_change_needs_yes(mc, api):
     mc.login_as()
+    api.on("GET", "/me", ok(LEE_ME))
     api.on("GET", "/missions/1", ok(gateway("pending_approval")))
 
     result = mc("missions", "edit", "1", "--name", "New")
@@ -304,8 +357,29 @@ def test_m16_edit_with_nothing_to_change_is_a_usage_error(mc, api):
     assert api.calls == []
 
 
-def test_c4_cancelling_always_asks_and_sends_the_reason(mc, api):
+def test_ac6_cancelling_says_how_many_assignments_were_cancelled_too(mc, api):
     mc.login_as()
+    rows = [
+        {"id": 21, "slot_id": 1, "slot_name": "Flight Engineer", "crew_profile_id": 8,
+         "crew_name": "Chen Wu", "status": "cancelled", "reason": None},
+        {"id": 22, "slot_id": 2, "slot_name": "Mission Specialist", "crew_profile_id": 9,
+         "crew_name": "Dana Reyes", "status": "cancelled", "reason": None},
+        {"id": 23, "slot_id": 3, "slot_name": "Commander", "crew_profile_id": 6,
+         "crew_name": "Ana Okafor", "status": "declined", "reason": None},
+    ]  # fmt: skip
+    api.on("GET", "/me", ok(LEE_ME))
+    api.on("GET", "/missions/1", ok(gateway()))
+    api.on("POST", "/missions/1/cancel", ok(gateway("cancelled", rows)))
+
+    result = mc("missions", "cancel", "1", "--reason", "Budget cut", "--yes")
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout == "✓ Cancelled Lunar Gateway Resupply and its 2 open assignments.\n"
+
+
+def test_c4_cancelling_asks_the_owner_and_sends_the_reason(mc, api):
+    mc.login_as()
+    api.on("GET", "/me", ok(LEE_ME))
     api.on("GET", "/missions/1", ok(gateway()))
     api.on("POST", "/missions/1/cancel", ok(gateway("cancelled")))
 
@@ -319,6 +393,106 @@ def test_c4_cancelling_always_asks_and_sends_the_reason(mc, api):
     assert result.asked == [("Cancel Lunar Gateway Resupply? [y/N]", False)]
     assert api.sent("POST", "/missions/1/cancel")[0].body == {"reason": "Budget cut"}
     assert result.stdout == "✓ Cancelled Lunar Gateway Resupply.\n"
+
+
+RUTH_ME = LEE_ME | {"id": 1, "email": "ruth@aurora.example", "name": "Ruth Adeyemi",
+                    "role": "director"}  # fmt: skip
+NORA_ME = LEE_ME | {"id": 5, "email": "nora@aurora.example", "name": "Nora Quinn"}
+SURVEY = gateway() | {"id": 2, "name": "Asteroid Survey", "owner_id": 5, "owner_name": "Nora Quinn"}
+
+
+def test_c4_a_director_cancelling_is_asked(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    api.on("GET", "/me", ok(RUTH_ME))
+    api.on("GET", "/missions/2", ok(SURVEY))
+    api.on("POST", "/missions/2/cancel", ok(SURVEY | {"status": "cancelled"}))
+
+    result = mc("missions", "cancel", "2", "--reason", "Budget cut", answers=["y"])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.asked == [("Cancel Asteroid Survey? [y/N]", False)]
+
+
+def test_c4_no_confirmation_for_a_cancel_the_server_will_refuse(mc, api):
+    mc.login_as()  # Lee, who doesn't own Asteroid Survey and isn't a Director
+    api.on("GET", "/me", ok(LEE_ME))
+    api.on("GET", "/missions/2", ok(SURVEY))
+    api.on(
+        "POST",
+        "/missions/2/cancel",
+        error(403, "not_owner", "Only the owner or a Director can cancel this mission"),
+    )
+
+    result = mc("missions", "cancel", "2", "--reason", "x", answers=[])
+
+    assert result.exit_code == 1
+    assert result.asked == []
+    assert result.stderr == (
+        "✗ Only the owner or a Director can cancel this mission.\n"
+        "  See who owns it: mc missions show 2\n"
+    )
+    assert len(api.sent("POST", "/missions/2/cancel")) == 1
+
+
+def test_c4_no_confirmation_for_an_edit_by_someone_other_than_the_owner(mc, api):
+    mc.login_as("tok-nora", "nora@aurora.example")
+    api.on("GET", "/me", ok(NORA_ME))
+    api.on("GET", "/missions/1", ok(gateway("pending_approval")))
+    api.on(
+        "PATCH",
+        "/missions/1",
+        error(403, "not_owner", "Only the mission's owner can edit this mission"),
+    )
+
+    result = mc("missions", "edit", "1", "--name", "New")  # no terminal and no --yes
+
+    assert result.exit_code == 1
+    assert "pending approval" not in result.stderr
+    assert result.stderr.startswith("✗ Only the mission's owner can edit this mission.\n")
+
+
+def test_c4_a_director_editing_is_not_asked_either(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    api.on("GET", "/me", ok(RUTH_ME))
+    api.on("GET", "/missions/1", ok(gateway("pending_approval")))
+    api.on("PATCH", "/missions/1", error(403, "role_forbidden", "Directors can't edit missions"))
+
+    result = mc("missions", "edit", "1", "--name", "New", answers=[])
+
+    assert result.exit_code == 1
+    assert result.asked == []
+    assert result.stderr == "✗ Directors can't edit missions.\n"
+
+
+def test_c4_transferring_a_pending_mission_asks_a_director(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    api.on("GET", "/me", ok(RUTH_ME))
+    api.on("GET", "/users", ok(USERS))
+    api.on("GET", "/missions/1", ok(gateway("pending_approval")))
+
+    result = mc("missions", "transfer", "1", "--owner", "nora@aurora.example", answers=["n"])
+
+    assert result.exit_code == 1
+    assert result.asked == [("Continue? [y/N]", False)]
+    assert api.writes() == []
+
+
+def test_c4_no_confirmation_for_a_transfer_by_a_lead(mc, api):
+    mc.login_as()
+    api.on("GET", "/me", ok(LEE_ME))
+    api.on("GET", "/users", ok(USERS))
+    api.on("GET", "/missions/1", ok(gateway("pending_approval")))
+    api.on(
+        "POST",
+        "/missions/1/owner",
+        error(403, "role_forbidden", "Leads can't transfer mission ownership"),
+    )
+
+    result = mc("missions", "transfer", "1", "--owner", "nora@aurora.example", answers=[])
+
+    assert result.exit_code == 1
+    assert result.asked == []
+    assert result.stderr == "✗ Leads can't transfer mission ownership.\n"
 
 
 def test_ac6_cancel_needs_a_reason_flag(mc, api):
@@ -407,7 +581,7 @@ def test_m7_slot_change_that_would_invalidate_crew_lists_them(mc, api):
         "/missions/1/slots/1",
         error(
             409,
-            "invalidates_assignments",
+            "rule_violation",
             message,
             [problem("slot_has_open_assignments", "Chen Wu is assigned to Flight Engineer",
                      assignment_id=21, crew_profile_id=8, slot_id=1)],
@@ -485,7 +659,8 @@ def test_ac4_remove_crew_from_a_pending_mission_confirms(mc, api):
     row = {"id": 21, "slot_id": 1, "slot_name": "Flight Engineer", "crew_profile_id": 8,
            "crew_name": "Chen Wu", "status": "accepted", "reason": None}  # fmt: skip
     api.on("GET", "/missions/1", ok(gateway("pending_approval", [row])))
-    api.on("POST", "/assignments/21/remove", ok(row | {"status": "removed"}))
+    api.on("POST", "/assignments/21/remove", ok({"id": 21, "mission_id": 1, "slot_id": 1,
+           "crew_profile_id": 8, "status": "removed", "reason": None}))  # fmt: skip
 
     result = mc("missions", "remove-crew", "1", "21", "--yes")
 

@@ -5,8 +5,9 @@ from datetime import date
 from typing import Annotated, Any
 
 import typer
-from typer.core import TyperCommand, TyperGroup
+from typer.core import TyperCommand
 
+from mission_control.cli.base import HelpWhenBare
 from mission_control.cli.client import ApiError, Unreachable
 from mission_control.cli.env import Env
 from mission_control.cli.errors import CliError
@@ -40,15 +41,9 @@ class Command(TyperCommand):
                 formatter.write(f"{' ' * formatter.current_indent}{line}\n")
 
 
-class Group(TyperGroup):
+class Group(HelpWhenBare):
     """A bare group prints its help and exits 0. Failures raised by commands are reported here
     with their exit code, so tests and real runs behave the same."""
-
-    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
-        if not args and not ctx.resilient_parsing:
-            typer.echo(ctx.get_help())
-            ctx.exit(0)
-        return super().parse_args(ctx, args)
 
     def invoke(self, ctx: typer.Context) -> Any:
         try:

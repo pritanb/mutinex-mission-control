@@ -21,7 +21,7 @@ from types import MappingProxyType
 
 from mission_control.domain.eligibility import ineligibility_reasons
 from mission_control.domain.enums import Action, AssignmentStatus, MissionStatus
-from mission_control.domain.errors import InvalidInput, Problem
+from mission_control.domain.errors import Problem
 from mission_control.domain.events import Event
 from mission_control.domain.lifecycle import (
     StateConflict,
@@ -30,7 +30,6 @@ from mission_control.domain.lifecycle import (
     cascade,
     mission_status_after_assignment_action,
 )
-from mission_control.domain.permissions import Context
 from mission_control.domain.records import SlotSpec
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import (
@@ -44,9 +43,11 @@ from mission_control.services.context import (
     check,
     found,
     mission_context,
+    profile_context,
     return_to_draft,
     visible_mission,
 )
+from mission_control.services.inputs import required_reason
 
 A = AssignmentStatus
 
@@ -92,7 +93,7 @@ def propose(ctx: ServiceContext, mission_id: int, slot_id: int, crew_profile_id:
         # The person is looked up only once the actor may propose, so a refusal never
         # reveals whether a crew id exists.
         profile = found(repos.crew.get(crew_profile_id), _CREW_MEMBER)
-        ctx.authorize_view(Action.VIEW_CREW, _about(profile), _CREW_MEMBER)
+        ctx.authorize_view(Action.VIEW_CREW, profile_context(profile), _CREW_MEMBER)
         return make_proposal(ctx, repos, mission, slots, slot, profile)
 
 
@@ -129,7 +130,7 @@ def accept(ctx: ServiceContext, assignment_id: int) -> Assignment:
     mission."""
     with ctx.write() as repos:
         assignment, mission, profile = _load(ctx, repos, assignment_id)
-        ctx.authorize(Action.ACCEPT, _about(profile))
+        ctx.authorize(Action.ACCEPT, profile_context(profile))
         _check_state(Action.ACCEPT, assignment.status, mission)
         slot = _slot_of(repos, mission, assignment)
         check(
@@ -144,7 +145,7 @@ def decline(ctx: ServiceContext, assignment_id: int, reason: str | None = None) 
     one is stored as none."""
     with ctx.write() as repos:
         assignment, mission, profile = _load(ctx, repos, assignment_id)
-        ctx.authorize(Action.DECLINE, _about(profile))
+        ctx.authorize(Action.DECLINE, profile_context(profile))
         _check_state(Action.DECLINE, assignment.status, mission)
         slot = _slot_of(repos, mission, assignment)
         given = (reason or "").strip() or None
@@ -157,11 +158,9 @@ def withdraw(ctx: ServiceContext, assignment_id: int, reason: str | None) -> Ass
     roster is frozen."""
     with ctx.write() as repos:
         assignment, mission, profile = _load(ctx, repos, assignment_id)
-        ctx.authorize(Action.WITHDRAW, _about(profile))
+        ctx.authorize(Action.WITHDRAW, profile_context(profile))
         _check_state(Action.WITHDRAW, assignment.status, mission)
-        given = (reason or "").strip()
-        if not given:
-            raise InvalidInput(f"Withdrawing from {mission.name} needs a reason")
+        given = required_reason(reason, f"Withdrawing from {mission.name}")
         slot = _slot_of(repos, mission, assignment)
         return _change(ctx, repos, Action.WITHDRAW, assignment, mission, slot, profile, given)
 
@@ -197,21 +196,20 @@ def my_assignments(ctx: ServiceContext, pending: bool = False) -> list[Assignmen
 
 
 def cascade_mission_end(
-    ctx: ServiceContext, mission: Mission, final_status: MissionStatus
+    ctx: ServiceContext, repos: Repos, mission: Mission, final_status: MissionStatus
 ) -> list[Assignment]:
     """Apply a mission's completion or cancellation to its assignments: completing it completes
     every accepted assignment; cancelling it cancels every proposed or accepted one. Anything
     else is left as it is. Each change is written and audited as the acting user.
 
-    Call it inside the caller's `with ctx.write():`, after the caller has authorized and checked
-    the mission's own transition, so the assignments change in the same transaction as the
-    mission and roll back with it. It does no permission or state checks of its own. Returns the
-    changed assignments, in id order."""
+    Call it inside the caller's `with ctx.write() as repos:`, after the caller has authorized and
+    checked the mission's own transition, so the assignments change in the same transaction as
+    the mission and roll back with it. It does no permission or state checks of its own. Returns
+    the changed assignments, in id order."""
     if final_status not in _MISSION_ENDS:
         raise ValueError(f"a mission ends completed or cancelled, not {final_status.value}")
     if not ctx.conn.in_transaction:
         raise RuntimeError("cascade_mission_end runs inside the caller's ctx.write()")
-    repos = ctx.repos
     slots = _slot_specs(repos, mission)
     changed = []
     for assignment in repos.missions.assignments(mission.id):
@@ -236,7 +234,7 @@ def _load(
     organisation's, or a crew member's who isn't the caller."""
     assignment = found(repos.assignments.get(assignment_id), _ASSIGNMENT)
     profile = found(repos.crew.get(assignment.crew_profile_id), _ASSIGNMENT)
-    ctx.authorize_view(Action.VIEW_ASSIGNMENT_HISTORY, _about(profile), _ASSIGNMENT)
+    ctx.authorize_view(Action.VIEW_ASSIGNMENT_HISTORY, profile_context(profile), _ASSIGNMENT)
     # Seeing the assignment is enough to see its mission's name and state, as in the crew
     # member's assignment history.
     mission = found(repos.missions.get(assignment.mission_id), _ASSIGNMENT)
@@ -252,11 +250,6 @@ def _slot_of(repos: Repos, mission: Mission, assignment: Assignment) -> SlotSpec
     """The slot of an open assignment. A slot can't be removed while it has open assignments,
     so it's always live once the state check has passed."""
     return found(_slot_specs(repos, mission).get(assignment.slot_id), _SLOT)
-
-
-def _about(profile: CrewProfile) -> Context:
-    """Permission context for someone's assignment: the person is the profile's user."""
-    return Context(target_user_id=profile.user_id)
 
 
 # Checks

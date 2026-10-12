@@ -1,18 +1,20 @@
 """M16: signing in and out, who am I, and changing a password (PRD §4.1, P10; design §8).
 
 Passwords are only ever asked for with a hidden prompt, never taken as a flag. When stdin isn't a
-terminal they're read from it, one line per prompt, so scripts can pipe them in.
+terminal they're read from it, one line per password, so scripts can pipe them in. A new password
+is asked twice only on a terminal; a piped one is read once.
 """
 
 import stat
 from datetime import UTC, datetime, timedelta
 
-from cli_fakes import LEE_ME, error, ok
+import httpx2
+from cli_fakes import LEE_ME, error, ok, session
 
 
 def _login_ok(request):
     expires = datetime.now(UTC) + timedelta(hours=12)
-    return ok({"token": "tok-new", "expires_at": expires.isoformat().replace("+00:00", "Z")})
+    return ok(session("tok-new", LEE_ME, expires.isoformat().replace("+00:00", "Z")))
 
 
 def test_m16_login_prompts_for_email_and_hidden_password_then_stores_the_token(mc, api):
@@ -75,6 +77,49 @@ def test_m16_login_without_a_terminal_or_piped_password_fails_clearly(mc, api):
     assert api.calls == []
 
 
+def test_m16_login_again_ends_the_previous_session_on_the_server(mc, api):
+    mc.login_as("tok-old")
+    api.on("POST", "/auth/login", _login_ok)
+    api.on("POST", "/auth/logout", ok(status=204))
+    api.on("GET", "/me", ok(LEE_ME))
+
+    result = mc("login", "--email", "lee@aurora.example", input="orbital launch window\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert [c.token for c in api.sent("POST", "/auth/logout")] == ["tok-old"]
+    assert [(c.method, c.path) for c in api.calls][:2] == [
+        ("POST", "/auth/login"),
+        ("POST", "/auth/logout"),
+    ]
+    assert mc.store.load().token == "tok-new"
+
+
+def test_m16_login_again_ignores_a_previous_session_the_server_already_ended(mc, api):
+    mc.login_as("tok-old")
+    api.on("POST", "/auth/login", _login_ok)
+    api.on("POST", "/auth/logout", error(401, "unauthenticated", "Your session has ended"))
+    api.on("GET", "/me", ok(LEE_ME))
+
+    result = mc("login", "--email", "lee@aurora.example", input="orbital launch window\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stderr == "Next: mc inbox\n"
+    assert mc.store.load().token == "tok-new"
+
+
+def test_m16_a_failed_login_keeps_the_previous_session(mc, api):
+    mc.login_as("tok-old")
+    api.on(
+        "POST", "/auth/login", error(401, "invalid_credentials", "Email or password is incorrect")
+    )
+
+    result = mc("login", "--email", "lee@aurora.example", input="typo\n")
+
+    assert result.exit_code == 3
+    assert api.sent("POST", "/auth/logout") == []
+    assert mc.store.load().token == "tok-old"
+
+
 def test_m16_password_is_never_a_flag(mc):
     result = mc("login", "--email", "lee@aurora.example", "--password", "x")
 
@@ -117,6 +162,23 @@ def test_m16_logout_when_the_session_already_ended_still_clears_the_file(mc, api
 
     assert result.exit_code == 0
     assert result.stdout == "✓ Logged out.\n"
+    assert not mc.store.path.exists()
+
+
+def test_m16_logout_with_the_server_unreachable_still_forgets_the_session(mc):
+    mc.login_as("tok-lee")
+
+    def refuse(request):
+        raise httpx2.ConnectError("connection refused", request=request)
+
+    result = mc("logout", http=httpx2.Client(transport=httpx2.MockTransport(refuse)))
+
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    assert result.stderr == (
+        "! Couldn't reach the server, so the session may stay valid until it expires. "
+        "Removed it from this computer.\n"
+    )
     assert not mc.store.path.exists()
 
 
@@ -169,7 +231,7 @@ def test_m16_a_401_clears_the_stored_session_and_exits_3(mc, api):
     result = mc("whoami")
 
     assert result.exit_code == 3
-    assert result.stderr == "✗ Your session has expired.\n  Log in again: mc login\n"
+    assert result.stderr == "✗ Your session has expired.\n  Log in: mc login\n"
     assert not mc.store.path.exists()
 
 
@@ -197,6 +259,29 @@ def test_p10_password_change_asks_current_then_new_twice_and_ends_the_session(mc
     )
     assert "Next: mc login" in result.stderr
     assert not mc.store.path.exists()
+
+
+def test_p10_without_a_terminal_password_reads_current_then_new_from_stdin(mc, api):
+    mc.login_as("tok-lee")
+    api.on("POST", "/me/password", ok(status=204))
+
+    result = mc("password", input="old password here\nnew passphrase is long\n")
+
+    assert result.exit_code == 0, result.stderr
+    assert api.sent("POST", "/me/password")[0].body == {
+        "current_password": "old password here",
+        "new_password": "new passphrase is long",
+    }
+
+
+def test_p10_without_a_terminal_a_missing_new_password_fails_clearly(mc, api):
+    mc.login_as("tok-lee")
+
+    result = mc("password", input="old password here\n")
+
+    assert result.exit_code == 2
+    assert "No password given" in result.stderr
+    assert api.calls == []
 
 
 def test_p10_mismatched_new_passwords_change_nothing(mc, api):
@@ -233,7 +318,7 @@ def test_p10_wrong_current_password_keeps_the_session(mc, api):
         error(403, "wrong_current_password", "Your current password is incorrect"),
     )
 
-    result = mc("password", input="bad\nnew passphrase is long\nnew passphrase is long\n")
+    result = mc("password", input="bad\nnew passphrase is long\n")
 
     assert result.exit_code == 1
     assert result.stderr.startswith("✗ Your current password is incorrect.\n")

@@ -1,7 +1,7 @@
 """Demo data for two organisations. Shared by `mc-admin seed` and the tests.
 
-Ids are fixed and follow the people and mission tables in the PRD, so a crew profile's id
-equals its user's id. The matcher's final tie-break is the crew profile id.
+Ids are fixed, and a crew profile's id equals its user's id, so the demo and the tests can name
+people and missions by number. The matcher's final tie-break is the crew profile id.
 """
 
 from collections.abc import Mapping

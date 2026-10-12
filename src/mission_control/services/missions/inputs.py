@@ -1,13 +1,13 @@
-"""What callers pass in, and the checks on it. Malformed values are refused as InvalidInput
-(422), listing every mistake at once."""
+"""What callers pass in to the mission use cases, and the checks on it. Malformed values are
+refused as InvalidInput (422), listing every mistake at once."""
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
 from types import MappingProxyType
 
-from mission_control.domain.errors import InvalidInput, Problem
+from mission_control.domain.errors import Problem
 from mission_control.domain.records import MAX_LEVEL, MIN_LEVEL, Requirement
+from mission_control.services.inputs import invalid
 
 
 @dataclass(frozen=True)
@@ -22,29 +22,8 @@ class SlotInput:
         object.__setattr__(self, "requirements", MappingProxyType(dict(self.requirements)))
 
 
-def refuse_input(problems: Sequence[Problem]) -> None:
-    if problems:
-        raise invalid_input(problems)
-
-
-def invalid_input(problems: Sequence[Problem]) -> InvalidInput:
-    """Every mistake at once; the message is the only one's, or a summary of several."""
-    message = problems[0].message if len(problems) == 1 else "Some values aren't valid"
-    return InvalidInput(message, problems)
-
-
-def invalid(message: str, refs: Mapping[str, int] | None = None) -> Problem:
-    return Problem("validation_error", message, refs or {})
-
-
 def name_problems(name: str) -> list[Problem]:
     return [] if name.strip() else [invalid("The mission needs a name")]
-
-
-def date_problems(start: date, end: date) -> list[Problem]:
-    if end >= start:
-        return []
-    return [invalid(f"The end date {end.isoformat()} is before the start date {start.isoformat()}")]
 
 
 def slot_problems(

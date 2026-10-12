@@ -211,6 +211,8 @@ def test_s2_overlapping_proposals_on_different_missions_are_allowed(seeded_db):
 
 
 def test_ac4_proposing_on_a_pending_mission_returns_it_to_draft(seeded_db):
+    # Users can't add a slot to a Pending mission without sending it back to Draft, so the open
+    # place is made through the repository: this checks the return to Draft on its own.
     backup = Repos(seeded_db, 1).missions.add_slot(DEEP_SPACE, "Backup Engineer", 1, {SYS_ENG: 3})
     before = last_audit_id(seeded_db)
     made = assignments.propose(as_(seeded_db, NORA), DEEP_SPACE, backup.id, GUS_ID)
@@ -229,6 +231,30 @@ def test_ac4_proposing_on_a_pending_mission_returns_it_to_draft(seeded_db):
         None,
         {"mission_name": "Deep Space Comms Upgrade", "cause": "assignment.proposed"},
     )
+
+
+def test_ac4_a_pending_missions_slots_are_full_so_a_proposal_is_refused_and_it_stays_pending(
+    seeded_db,
+):
+    # A mission can only be submitted with every place filled, so on a Pending mission a
+    # proposal finds no open place: Deep Space Comms' only Engineer place is Ben's.
+    before = snapshot(seeded_db)
+    error = refused(
+        assignments.propose, as_(seeded_db, NORA), DEEP_SPACE, DEEP_SPACE_ENGINEER, GUS_ID
+    )
+    assert (error.code, error.message) == (
+        "rule_violation",
+        "Gus can't be proposed as Engineer on Deep Space Comms Upgrade",
+    )
+    assert [(p.code, p.message, dict(p.refs)) for p in error.problems] == [
+        (
+            "slot_full",
+            "Engineer on Deep Space Comms Upgrade has no open places",
+            {"slot_id": DEEP_SPACE_ENGINEER},
+        )
+    ]
+    assert mission_status(seeded_db, DEEP_SPACE) == "pending_approval"
+    assert snapshot(seeded_db) == before
 
 
 def test_ac5_proposing_on_an_active_mission_is_refused(seeded_db):
@@ -625,8 +651,8 @@ def test_m4_completing_a_mission_completes_accepted_assignments(seeded_db):
     ctx = as_(seeded_db, LEE)
     mission = Repos(seeded_db, 1).missions.get(TELESCOPE)
     before = last_audit_id(seeded_db)
-    with ctx.write():
-        changed = assignments.cascade_mission_end(ctx, mission, MissionStatus.COMPLETED)
+    with ctx.write() as repos:
+        changed = assignments.cascade_mission_end(ctx, repos, mission, MissionStatus.COMPLETED)
     assert sorted(a.crew_profile_id for a in changed) == [CHEN_ID, DANA_ID, ELI_ID, HANA_ID]
     assert {a.status for a in changed} == {A.COMPLETED}
     events = audit_since(seeded_db, before)
@@ -650,8 +676,8 @@ def test_m4_cancelling_a_mission_cancels_open_assignments_only(seeded_db):
     ctx = as_(seeded_db, RUTH)
     mission = Repos(seeded_db, 1).missions.get(GATEWAY)
     before = last_audit_id(seeded_db)
-    with ctx.write():
-        changed = assignments.cascade_mission_end(ctx, mission, MissionStatus.CANCELLED)
+    with ctx.write() as repos:
+        changed = assignments.cascade_mission_end(ctx, repos, mission, MissionStatus.CANCELLED)
     assert [(a.id, a.status) for a in changed] == [
         (proposed.id, A.CANCELLED),
         (accepted.id, A.CANCELLED),
@@ -670,8 +696,8 @@ def test_m4_completing_leaves_proposals_and_closed_assignments_alone(seeded_db):
     mission = repos.missions.get(REBOOST)
     proposal = repos.assignments.create(REBOOST, REBOOST_ENGINEER, CHEN_ID, proposed_by_id=5)
     ctx = as_(seeded_db, NORA)
-    with ctx.write():
-        changed = assignments.cascade_mission_end(ctx, mission, MissionStatus.COMPLETED)
+    with ctx.write() as repos:
+        changed = assignments.cascade_mission_end(ctx, repos, mission, MissionStatus.COMPLETED)
     assert [a.crew_profile_id for a in changed] == [GUS_ID]
     assert status_of(seeded_db, proposal.id) == "proposed"
 
@@ -681,7 +707,7 @@ def test_cascade_runs_only_inside_the_callers_write(seeded_db):
     mission = Repos(seeded_db, 1).missions.get(TELESCOPE)
     before = snapshot(seeded_db)
     with pytest.raises(RuntimeError):
-        assignments.cascade_mission_end(ctx, mission, MissionStatus.COMPLETED)
+        assignments.cascade_mission_end(ctx, ctx.repos, mission, MissionStatus.COMPLETED)
     assert snapshot(seeded_db) == before
 
 
@@ -690,8 +716,8 @@ def test_cascade_rolls_back_with_the_callers_transaction(seeded_db):
     mission = Repos(seeded_db, 1).missions.get(TELESCOPE)
     before = snapshot(seeded_db)
     with pytest.raises(RuntimeError, match="caller failed"):
-        with ctx.write():
-            assignments.cascade_mission_end(ctx, mission, MissionStatus.COMPLETED)
+        with ctx.write() as repos:
+            assignments.cascade_mission_end(ctx, repos, mission, MissionStatus.COMPLETED)
             raise RuntimeError("caller failed")
     assert snapshot(seeded_db) == before
 
@@ -702,8 +728,8 @@ def test_cascade_rolls_back_with_the_callers_transaction(seeded_db):
 def test_cascade_needs_a_final_status(seeded_db, status):
     ctx = as_(seeded_db, LEE)
     mission = Repos(seeded_db, 1).missions.get(TELESCOPE)
-    with ctx.write(), pytest.raises(ValueError):
-        assignments.cascade_mission_end(ctx, mission, status)
+    with ctx.write() as repos, pytest.raises(ValueError):
+        assignments.cascade_mission_end(ctx, repos, mission, status)
 
 
 # --- Scenarios end to end -----------------------------------------------------------------

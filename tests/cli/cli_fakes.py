@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import api_contract
 import httpx2
 from typer.testing import CliRunner
 
@@ -55,10 +56,14 @@ class Call:
 @dataclass
 class FakeApi:
     """Routes `(method, path)` to a fixed response or a handler. Unrouted calls fail the test
-    loudly with a 599, so a missing route can't pass by accident."""
+    loudly with a 599, so a missing route can't pass by accident.
+
+    Every response it sends is checked against the real API's routes and response models, and
+    any mismatch is kept in `drift`; the `api` fixture fails the test if there's any."""
 
     routes: dict[tuple[str, str], Handler | httpx2.Response] = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
+    drift: list[str] = field(default_factory=list)
 
     def on(self, method: str, path: str, response: Handler | httpx2.Response) -> None:
         self.routes[(method.upper(), path)] = response
@@ -72,7 +77,9 @@ class FakeApi:
         route = self.routes.get((request.method, path))
         if route is None:
             return httpx2.Response(599, json={"unrouted": f"{request.method} {path}"})
-        return route(request) if callable(route) else route
+        response = route(request) if callable(route) else route
+        self.drift += api_contract.problems(request.method, path, response)
+        return response
 
     def client(self) -> httpx2.Client:
         return httpx2.Client(transport=httpx2.MockTransport(self.handle), base_url=BASE_URL)
@@ -162,8 +169,15 @@ LEE_ME = {
     "role": "lead",
     "active": True,
     "crew_profile_id": None,
-    "organisation": {"id": 1, "name": "Aurora Space Agency"},
+    "organisation": {"id": 1, "name": "Aurora Space Agency", "slug": "aurora"},
 }
+
+
+def session(token: str, me: Mapping[str, Any], expires_at: str = "2027-01-05T21:00:00Z") -> dict:
+    """A `POST /auth/login` body for the user `me` describes."""
+    user = {k: me[k] for k in ("id", "email", "name", "role", "active")}
+    return {"token": token, "expires_at": expires_at, "user": user}
+
 
 SKILLS = [
     {"id": 1, "name": "Piloting", "category": None},
@@ -272,6 +286,17 @@ def gateway(
         "assignments": list(assignments),
         "approvals": list(approvals),
     }
+
+
+_SUMMARY_FIELDS = (
+    "id", "name", "start_date", "end_date", "status", "owner_id", "owner_name",
+    "created_by_id", "approval_round", "approvals_required",
+)  # fmt: skip
+
+
+def summary(mission: Mapping[str, Any]) -> dict:
+    """The `GET /missions` row for a full mission record."""
+    return {k: mission[k] for k in _SUMMARY_FIELDS}
 
 
 S2_PREVIEW = {

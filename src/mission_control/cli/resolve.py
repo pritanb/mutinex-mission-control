@@ -66,23 +66,25 @@ def _slot_error(text: str) -> SpecError:
 
 def skill_ids(api: Api, names: Sequence[str]) -> dict[str, int]:
     """Skill names (any case) to IDs, from the organisation's catalogue."""
-    catalogue = {s["name"].casefold(): s for s in api.get("/skills")}
-    found: dict[str, int] = {}
-    for name in names:
-        skill = catalogue.get(name.casefold())
-        if skill is None:
-            raise Refused(
-                f"There's no skill called '{name}'", hint="See the skills: mc skills list"
-            )
-        found[name] = skill["id"]
-    return found
+    catalogue = _catalogue(api)
+    return {name: _skill_in(catalogue, name)["id"] for name in names}
 
 
 def skill_named(api: Api, name: str) -> dict[str, Any]:
-    for skill in api.get("/skills"):
-        if skill["name"].casefold() == name.casefold():
-            return skill
-    raise Refused(f"There's no skill called '{name}'", hint="See the skills: mc skills list")
+    """A skill from the organisation's catalogue, by name in any case."""
+    return _skill_in(_catalogue(api), name)
+
+
+def _catalogue(api: Api) -> dict[str, dict[str, Any]]:
+    """The organisation's skills by name, ignoring case. Names are unique ignoring case."""
+    return {s["name"].casefold(): s for s in api.get("/skills")}
+
+
+def _skill_in(catalogue: Mapping[str, dict[str, Any]], name: str) -> dict[str, Any]:
+    skill = catalogue.get(name.casefold())
+    if skill is None:
+        raise Refused(f"There's no skill called '{name}'", hint="See the skills: mc skills list")
+    return skill
 
 
 def requirement_body(

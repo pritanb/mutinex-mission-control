@@ -10,6 +10,7 @@ from mission_control.infra.repositories.models import AuditEntry, Mission
 from mission_control.services.missions import (
     ApprovalView,
     AssignmentView,
+    MissionListItem,
     MissionView,
     SlotInput,
     SlotView,
@@ -169,24 +170,25 @@ class MissionSummaryOut(BaseModel):
     end_date: date
     status: MissionStatus
     owner_id: int
+    owner_name: str
     created_by_id: int
     approval_round: int
     approvals_required: int | None  # fixed when the mission is submitted
 
     @classmethod
-    def of(cls, m: Mission) -> "MissionSummaryOut":
-        return cls(**_summary(m))
+    def of(cls, item: MissionListItem) -> "MissionSummaryOut":
+        return cls(**_summary(item.mission), owner_name=item.owner_name)
 
 
 class MissionOut(MissionSummaryOut):
     """A mission with its live slots in listed order, every assignment it has had, and the
     approvals of its current round."""
 
-    owner_name: str
     created_by_name: str
     slots: list[SlotOut]
     assignments: list[RosterAssignmentOut]
     approvals: list[ApprovalOut]
+    rejection: ApprovalOut | None = None  # while a rejected mission is back in Draft
 
     @classmethod
     def of_view(cls, v: MissionView) -> "MissionOut":
@@ -197,6 +199,7 @@ class MissionOut(MissionSummaryOut):
             slots=[SlotOut.of(s) for s in v.slots],
             assignments=[RosterAssignmentOut.of(a) for a in v.assignments],
             approvals=[ApprovalOut.of(a) for a in v.approvals],
+            rejection=ApprovalOut.of(v.rejection) if v.rejection else None,
         )
 
 

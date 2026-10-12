@@ -21,7 +21,9 @@ def test_c2_every_problem_is_listed_once_under_the_message(mc, api):
             [
                 problem("slot_unfilled", "Flight Engineer: 1 place unfilled", slot_id=1),
                 problem("slot_unfilled", "Commander: 1 place unfilled", slot_id=3),
-                problem("insufficient_approvers", "1 eligible approver, 2 required"),
+                problem(
+                    "insufficient_approvers", "Only 1 Director can approve this mission; it needs 2"
+                ),
             ],
         ),
     )
@@ -34,7 +36,7 @@ def test_c2_every_problem_is_listed_once_under_the_message(mc, api):
         "✗ Mission can't be submitted.\n"
         "  • Flight Engineer: 1 place unfilled\n"
         "  • Commander: 1 place unfilled\n"
-        "  • 1 eligible approver, 2 required\n"
+        "  • Only 1 Director can approve this mission; it needs 2\n"
         "  Fill the open places: mc missions match 1\n"
     )
 

@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from datetime import date
 
 from mission_control.domain.dates import DateRange
-from mission_control.domain.eligibility import invalidated_by_skill_change
-from mission_control.domain.errors import InvalidInput, Problem
+from mission_control.domain.eligibility import invalidated_by_skill_change, overlap_problem
+from mission_control.domain.errors import InvalidInput
 from mission_control.domain.events import Event
-from mission_control.domain.permissions import Action, Context, can
+from mission_control.domain.permissions import Action, can
 from mission_control.domain.records import MAX_LEVEL, MIN_LEVEL
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import (
@@ -25,7 +25,8 @@ from mission_control.infra.repositories.models import (
     Unavailability,
     User,
 )
-from mission_control.services.context import ServiceContext, check, found
+from mission_control.services.context import ServiceContext, check, found, profile_context
+from mission_control.services.inputs import date_problems, invalid, refuse_input
 
 _CREW_MEMBER = "Crew member"
 
@@ -72,7 +73,7 @@ def list_crew(ctx: ServiceContext) -> list[CrewView]:
         return [
             _view(ctx, repos, profile, users[profile.user_id], skill_names)
             for profile in repos.crew.list()
-            if can(ctx.actor, Action.VIEW_CREW, _about(profile))
+            if can(ctx.actor, Action.VIEW_CREW, profile_context(profile))
         ]
 
 
@@ -109,21 +110,26 @@ def update_details(
 ) -> CrewProfile:
     """Change your display name and bio. A value left as None stays as it is; a blank bio
     clears it."""
-    new_name = None if display_name is None else display_name.strip()
-    if new_name == "":
-        raise InvalidInput("Display name can't be blank")
     if display_name is None and bio is None:
         with ctx.read():  # nothing to change: still check access, but write nothing
             return _own_profile(ctx, crew_profile_id)
     with ctx.write() as repos:
         profile = _own_profile(ctx, crew_profile_id)
+        new_name = None if display_name is None else display_name.strip()
+        if new_name == "":
+            raise InvalidInput("Display name can't be blank")
         name = profile.display_name if new_name is None else new_name
         new_bio = profile.bio if bio is None else (bio.strip() or None)
         repos.crew.update(profile.id, name, new_bio)
+        changes: dict[str, list[str | None]] = {}
+        if name != profile.display_name:
+            changes["display_name"] = [profile.display_name, name]
+        if new_bio != profile.bio:
+            changes["bio"] = [profile.bio, new_bio]
         ctx.audit(
             Event.CREW_DETAILS_UPDATED,
             crew_profile_id=profile.id,
-            data={"crew_name": name, "previous_name": profile.display_name},
+            data={"crew_name": name, "changes": changes},
         )
         return found(repos.crew.get(profile.id), _CREW_MEMBER)
 
@@ -133,21 +139,21 @@ def add_unavailability(
 ) -> Unavailability:
     """Record a period you're unavailable. Past dates are allowed. Refused if it overlaps one
     of your accepted assignments on a mission that isn't finished."""
-    window = DateRange(start, end)
-    reason = reason.strip()
-    if not reason:
-        raise InvalidInput("Unavailability needs a reason")
     with ctx.write() as repos:
         profile = _own_profile(ctx, crew_profile_id)
+        reason = reason.strip()
+        problems = date_problems(start, end)
+        if not reason:
+            problems.append(invalid("Unavailability needs a reason"))
+        refuse_input(problems)
+        window = DateRange(start, end)
         clashes = [
-            _overlap(profile, c.mission_id, c.mission_name, c.window, window)
+            overlap_problem(profile.display_name, c, window, {"crew_profile_id": profile.id})
             for c in repos.facts.commitments(profile.id)
             if c.window.overlaps(window)
         ]
-        check(
-            clashes,
-            f"{profile.display_name} has accepted assignments overlapping those dates",
-        )
+        assignments = "an accepted assignment" if len(clashes) == 1 else "accepted assignments"
+        check(clashes, f"{profile.display_name} has {assignments} overlapping those dates")
         added = repos.crew.add_unavailability(profile.id, window, reason)
         ctx.audit(
             Event.CREW_UNAVAILABILITY_ADDED,
@@ -185,10 +191,10 @@ def set_skill_level(
 ) -> SkillLevel:
     """Add or change someone's level in one of the organisation's skills. Refused if it would
     leave them short of a requirement on an Active mission they're on."""
-    if not MIN_LEVEL <= level <= MAX_LEVEL:
-        raise InvalidInput(f"Skill level must be between {MIN_LEVEL} and {MAX_LEVEL}")
     with ctx.write() as repos:
         profile, skill_name, previous = _skill_target(ctx, repos, crew_profile_id, skill_id)
+        if not MIN_LEVEL <= level <= MAX_LEVEL:
+            raise InvalidInput(f"Skill level must be between {MIN_LEVEL} and {MAX_LEVEL}")
         _refuse_if_active_assignment_breaks(repos, profile, skill_id, skill_name, level)
         repos.crew.set_skill(profile.id, skill_id, level, updated_by=ctx.actor.user_id)
         ctx.audit(
@@ -197,8 +203,7 @@ def set_skill_level(
             data={
                 "crew_name": profile.display_name,
                 "skill_name": skill_name,
-                "level": level,
-                "previous_level": previous,
+                "changes": {"level": [previous, level]},
             },
         )
         return SkillLevel(skill_id, skill_name, level)
@@ -216,7 +221,7 @@ def remove_skill_level(ctx: ServiceContext, crew_profile_id: int, skill_id: int)
             data={
                 "crew_name": profile.display_name,
                 "skill_name": skill_name,
-                "previous_level": previous,
+                "changes": {"level": [previous, None]},
             },
         )
 
@@ -224,23 +229,18 @@ def remove_skill_level(ctx: ServiceContext, crew_profile_id: int, skill_id: int)
 # Helpers
 
 
-def _about(profile: CrewProfile) -> Context:
-    """Permission context for a profile: the person is its user, not the profile id."""
-    return Context(target_user_id=profile.user_id)
-
-
 def _visible_profile(ctx: ServiceContext, crew_profile_id: int, action: Action) -> CrewProfile:
     """The profile, or NotFound if it's missing, another organisation's, or hidden from the
     caller."""
     profile = found(ctx.repos.crew.get(crew_profile_id), _CREW_MEMBER)
-    ctx.authorize_view(action, _about(profile), _CREW_MEMBER)
+    ctx.authorize_view(action, profile_context(profile), _CREW_MEMBER)
     return profile
 
 
 def _own_profile(ctx: ServiceContext, crew_profile_id: int) -> CrewProfile:
     """The caller's own profile. Someone else's they can see is Forbidden."""
     profile = _visible_profile(ctx, crew_profile_id, Action.VIEW_CREW)
-    ctx.authorize(Action.EDIT_OWN_PROFILE, _about(profile))
+    ctx.authorize(Action.EDIT_OWN_PROFILE, profile_context(profile))
     return profile
 
 
@@ -249,7 +249,7 @@ def _skill_target(
 ) -> tuple[CrewProfile, str, int | None]:
     """The profile whose level is changing, the skill's name, and the current level."""
     profile = _visible_profile(ctx, crew_profile_id, Action.VIEW_CREW)
-    ctx.authorize(Action.SET_SKILL_LEVEL, _about(profile))
+    ctx.authorize(Action.SET_SKILL_LEVEL, profile_context(profile))
     skill = found(repos.skills.get(skill_id), "Skill")
     return profile, skill.name, repos.crew.skills(profile.id).get(skill_id)
 
@@ -264,18 +264,6 @@ def _refuse_if_active_assignment_breaks(
         broken,
         f"Changing {profile.display_name}'s {skill_name} level would break their assignments "
         f"on active missions",
-    )
-
-
-def _overlap(
-    profile: CrewProfile, mission_id: int, mission_name: str, busy: DateRange, wanted: DateRange
-) -> Problem:
-    shared = DateRange(max(busy.start, wanted.start), min(busy.end, wanted.end))
-    return Problem(
-        "overlap",
-        f"{profile.display_name} has an accepted assignment on {mission_name} overlapping "
-        f"{shared.start.isoformat()} to {shared.end.isoformat()}",
-        {"crew_profile_id": profile.id, "mission_id": mission_id, "mission_name": mission_name},
     )
 
 
@@ -321,7 +309,7 @@ def _unavailability(
     ctx: ServiceContext, repos: Repos, profile: CrewProfile
 ) -> tuple[UnavailabilityView, ...]:
     """Dates for anyone who can see the profile; reasons only for Directors and the person."""
-    show_reason = can(ctx.actor, Action.VIEW_UNAVAILABILITY_REASON, _about(profile))
+    show_reason = can(ctx.actor, Action.VIEW_UNAVAILABILITY_REASON, profile_context(profile))
     return tuple(
         UnavailabilityView(u.id, u.window, u.reason if show_reason else None)
         for u in repos.crew.unavailability(profile.id)

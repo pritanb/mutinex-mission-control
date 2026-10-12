@@ -93,6 +93,12 @@ def test_s6_ac10_approving_twice_and_rejecting_without_a_reason(client, login):
     assert (no_reason.status_code, no_reason.json()["error"]["code"]) == (422, "validation_error")
     rejected = post(client, ingrid, "/missions/6/reject", {"reason": "Budget not signed off"})
     assert (rejected.json()["status"], rejected.json()["approvals"]) == ("draft", [])
+    assert rejected.json()["rejection"] == {
+        "director_id": 3,
+        "director_name": "Ingrid Holm",
+        "decision": "reject",
+        "reason": "Budget not signed off",
+    }
 
 
 def test_s8_helix_activates_after_one_approval(client, login):
@@ -137,11 +143,14 @@ def test_inbox_shows_what_is_waiting_on_each_person(client, login):
     assert [(m["mission_name"], m["ready"]) for m in nora["missions"]] == [
         ("Station Reboost", False),
         ("Asteroid Survey", False),
-        ("Lunar Surface Medical Study", True),
+        ("Lunar Surface Medical Study", False),
     ]
     assert nora["missions"][0]["unfilled"] == [
         {"slot_id": 6, "slot_name": "Engineer", "open_places": 1}
     ]
+    medical = nora["missions"][2]
+    assert (medical["unfilled"], medical["unanswered"]) == ([], 0)
+    assert (medical["eligible_approvers"], medical["approvals_required"]) == (1, 2)
 
     ingrid = client.get(f"{API}/me/inbox", headers=login("ingrid")).json()
     assert ingrid["approvals"] == [

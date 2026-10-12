@@ -16,8 +16,6 @@ from mission_control.infra.repositories.models import Organisation, User
 
 SESSION_LIFETIME = timedelta(hours=12)
 
-_BAD_LOGIN = Unauthenticated("invalid_credentials", "Email or password is incorrect")
-
 
 @dataclass(frozen=True)
 class Session:
@@ -55,25 +53,25 @@ def login(
     found = security.find_login(conn, email)
     if found is None:
         security.verify_password(security.dummy_hash(), password)  # same cost as a real check
-        raise _BAD_LOGIN
+        raise _bad_login()
     verified_hash = found["password_hash"]
     if not security.verify_password(verified_hash, password):
-        raise _BAD_LOGIN
+        raise _bad_login()
     if not found["is_active"]:
-        raise _BAD_LOGIN
+        raise _bad_login()
     upgraded_hash = (
         security.hash_password(password) if security.needs_rehash(verified_hash) else None
     )
     token = security.new_token()
     expires = now + lifetime
     with write_tx(conn):
-        current = security.login_state(conn, found["id"])
+        current = security.login_state(conn, found["org_id"], found["id"])
         if current is None or current["password_hash"] != verified_hash:
-            raise _BAD_LOGIN
+            raise _bad_login()
         if not current["is_active"]:
-            raise _BAD_LOGIN
+            raise _bad_login()
         if upgraded_hash is not None:
-            security.set_password_hash(conn, found["id"], upgraded_hash)
+            security.set_password_hash(conn, found["org_id"], found["id"], upgraded_hash)
         security.store_token(conn, found["id"], security.hash_token(token), now, expires)
         user = Repos(conn, found["org_id"]).users.get(found["id"])
     assert user is not None
@@ -138,16 +136,22 @@ def change_password(
     now = _now(now)
     # Argon2 runs before the write lock is taken; the transaction then checks that the stored
     # hash is still the one the current password was verified against.
-    verified_hash = security.password_hash_of(conn, actor.user_id)
+    verified_hash = security.password_hash_of(conn, actor.org_id, actor.user_id)
     if not security.verify_password(verified_hash, current_password):
         raise _wrong_current_password()
     new_hash = security.hash_password(new_password)
     with write_tx(conn):
-        if security.password_hash_of(conn, actor.user_id) != verified_hash:
+        if security.password_hash_of(conn, actor.org_id, actor.user_id) != verified_hash:
             raise _wrong_current_password()
-        security.set_password_hash(conn, actor.user_id, new_hash)
+        security.set_password_hash(conn, actor.org_id, actor.user_id, new_hash)
         security.revoke_user_tokens(conn, actor.user_id, now)
         Repos(conn, actor.org_id).audit.record(actor.user_id, Event.USER_PASSWORD_CHANGED)
+
+
+def _bad_login() -> Unauthenticated:
+    """A new exception each time: a shared one would keep every failed attempt's frames, with
+    the passwords tried, in its traceback."""
+    return Unauthenticated("invalid_credentials", "Email or password is incorrect")
 
 
 def _wrong_current_password() -> Forbidden:

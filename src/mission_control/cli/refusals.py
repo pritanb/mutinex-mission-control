@@ -14,7 +14,7 @@ from mission_control.cli.render import sentence
 STATE_CODES = frozenset({"mission_frozen", "mission_final", "invalid_transition"})
 
 GENERIC_HINTS = {
-    "unauthenticated": "Log in again: mc login",
+    "unauthenticated": "Log in: mc login",
     "busy": "Try again in a moment.",
     "unexpected_response": "Try again. If it keeps happening, check the server's log.",
 }

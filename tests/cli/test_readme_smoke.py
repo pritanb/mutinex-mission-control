@@ -11,7 +11,6 @@ from the README itself and run for real, in order, as separate processes.
 - Passwords are piped on stdin, which the README says works without a terminal.
 """
 
-import importlib.util
 import os
 import shlex
 import sqlite3
@@ -63,16 +62,6 @@ def readme_steps() -> list[Step]:
             refused = comment.strip().lower().startswith("refused")
             steps.append(Step(number, tuple(words[2:]), refused))
     return steps
-
-
-def _has(module: str) -> bool:
-    try:
-        return importlib.util.find_spec(module) is not None
-    except ModuleNotFoundError:
-        return False
-
-
-PHASE_4_READY = _has("mission_control.cli.main") and _has("mission_control.api.routers")
 
 
 # --- The command list ---------------------------------------------------------------------
@@ -237,11 +226,6 @@ def test_r10_readme_mc_admin_commands_run(workdir):
     assert security.verify_password(zoe[0][0], NEW_DIRECTOR_PASSWORD)
 
 
-@pytest.mark.skipif(
-    not PHASE_4_READY,
-    reason="mc (M16) and the API routers (M15) aren't on this branch yet; "
-    "this runs once Phase 4 is reconciled",
-)
 def test_ac1_readme_quick_start_and_demo_run_end_to_end(workdir):
     database = workdir / "mission_control.db"
     steps = readme_steps()

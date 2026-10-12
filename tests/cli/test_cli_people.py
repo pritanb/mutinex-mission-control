@@ -1,7 +1,7 @@
 """M16: everyone's own commands (inbox, assignments, profile and availability) and the crew,
 users, skills and organisation commands (design §8; PRD §4, P1–P10, S2–S3, V2)."""
 
-from cli_fakes import CREW, LEE_ME, SKILLS, USERS, error, ok
+from cli_fakes import CREW, LEE_ME, SKILLS, USERS, error, ok, problem
 
 GATEWAY_PROPOSAL = {
     "assignment_id": 21,
@@ -65,6 +65,23 @@ def test_m16_empty_inbox(mc, api):
     assert result.stdout == "✓ Nothing needs your attention.\n"
 
 
+def _draft(mission_id, name, start, end, unfilled=(), unanswered=0, eligible=3, ready=False):
+    return {
+        "mission_id": mission_id,
+        "mission_name": name,
+        "start_date": start,
+        "end_date": end,
+        "unfilled": [
+            {"slot_id": i, "slot_name": slot, "open_places": places}
+            for i, (slot, places) in enumerate(unfilled, start=1)
+        ],
+        "unanswered": unanswered,
+        "eligible_approvers": eligible,
+        "approvals_required": 2,
+        "ready": ready,
+    }
+
+
 def test_inbox_shows_approvals_and_what_each_draft_mission_is_waiting_on(mc, api):
     mc.login_as()
     approval = {
@@ -75,28 +92,28 @@ def test_inbox_shows_approvals_and_what_each_draft_mission_is_waiting_on(mc, api
         "approvals": 1,
         "required": 2,
     }
-    unfilled = {
-        "mission_id": 2,
-        "mission_name": "Asteroid Survey",
-        "start_date": "2027-03-05",
-        "end_date": "2027-03-12",
-        "unfilled": [{"slot_id": 5, "slot_name": "Geologist", "open_places": 1}],
-        "unanswered": 2,
-        "ready": False,
-    }
-    ready = {
-        "mission_id": 4,
-        "mission_name": "Lunar Surface Medical Study",
-        "start_date": "2027-03-15",
-        "end_date": "2027-03-18",
-        "unfilled": [],
-        "unanswered": 0,
-        "ready": True,
-    }
+    gateway = _draft(
+        1,
+        "Lunar Gateway Resupply",
+        "2027-03-01",
+        "2027-03-10",
+        unfilled=[("Flight Engineer", 1), ("Mission Specialist", 1), ("Commander", 1)],
+    )
+    asteroid = _draft(
+        2, "Asteroid Survey", "2027-03-05", "2027-03-12", [("Geologist", 1)], unanswered=2
+    )
+    medical = _draft(4, "Lunar Surface Medical Study", "2027-03-15", "2027-03-18", eligible=1)
+    reboost = _draft(3, "Station Reboost", "2027-03-20", "2027-03-25", ready=True)
     api.on(
         "GET",
         "/me/inbox",
-        ok({"proposals": [], "approvals": [approval], "missions": [unfilled, ready]}),
+        ok(
+            {
+                "proposals": [],
+                "approvals": [approval],
+                "missions": [gateway, asteroid, medical, reboost],
+            }
+        ),
     )
 
     result = mc("inbox")
@@ -109,12 +126,47 @@ def test_inbox_shows_approvals_and_what_each_draft_mission_is_waiting_on(mc, api
         "\n"
         "Your draft missions\n"
         "  ID   Mission                       Dates            Waiting on\n"
+        "  1    Lunar Gateway Resupply        1–10 Mar 2027    3 places unfilled\n"
         "  2    Asteroid Survey               5–12 Mar 2027    "
-        "Geologist: 1 place unfilled; 2 replies awaited\n"
-        "  4    Lunar Surface Medical Study   15–18 Mar 2027   Ready to submit\n"
+        "1 place unfilled; 2 replies awaited\n"
+        "  4    Lunar Surface Medical Study   15–18 Mar 2027   "
+        "1 eligible approver, 2 required\n"
+        "  3    Station Reboost               20–25 Mar 2027   Ready to submit\n"
     )
     assert "mc missions approve 6" in result.stderr
-    assert "mc missions submit 4" in result.stderr
+    assert "mc missions submit 3" in result.stderr
+    assert "mc missions submit 4" not in result.stderr
+
+
+def test_inbox_never_suggests_submitting_a_mission_short_of_approvers(mc, api):
+    mc.login_as()
+    medical = _draft(4, "Lunar Surface Medical Study", "2027-03-15", "2027-03-18", eligible=1)
+    api.on("GET", "/me/inbox", ok({"proposals": [], "approvals": [], "missions": [medical]}))
+
+    result = mc("inbox")
+
+    assert result.exit_code == 0
+    assert "1 eligible approver, 2 required" in result.stdout
+    assert "mc missions submit" not in result.stderr
+
+
+def test_inbox_lists_every_reason_a_draft_mission_is_waiting(mc, api):
+    mc.login_as()
+    short = _draft(
+        2,
+        "Asteroid Survey",
+        "2027-03-05",
+        "2027-03-12",
+        [("Pilot", 1), ("Geologist", 2)],
+        unanswered=1,
+        eligible=0,
+    )
+    api.on("GET", "/me/inbox", ok({"proposals": [], "approvals": [], "missions": [short]}))
+
+    result = mc("inbox")
+
+    assert "3 places unfilled; 1 reply awaited; 0 eligible approvers, 2 required" in result.stdout
+    assert "Next: mc missions match 2" in result.stderr
 
 
 def test_s2_assignments_list_pending_only(mc, api):
@@ -127,7 +179,7 @@ def test_s2_assignments_list_pending_only(mc, api):
     assert api.calls[-1].params == {"pending": "true"}
     assert result.stdout == (
         "  ID   Mission                  Slot              Dates           Status\n"
-        "  21   Lunar Gateway Resupply   Flight Engineer   1–10 Mar 2027   proposed\n"
+        "  21   Lunar Gateway Resupply   Flight Engineer   1–10 Mar 2027   Proposed\n"
     )
 
 
@@ -239,7 +291,8 @@ def test_p4_me_show_includes_profile_skills_and_unavailability(mc, api):
 def test_p4_me_update_sends_only_what_changed(mc, api):
     mc.login_as("tok-ben", "ben@aurora.example")
     api.on("GET", "/me", ok(BEN_ME))
-    api.on("PATCH", "/crew/7", ok(CREW[1]))
+    api.on("PATCH", "/crew/7", ok({"crew_profile_id": 7, "user_id": 7, "name": "Ben Ito",
+                                   "bio": "EVA and systems"}))  # fmt: skip
 
     result = mc("me", "update", "--bio", "EVA and systems")
 
@@ -287,7 +340,12 @@ def test_ac16_unavailability_overlapping_an_accepted_assignment_is_refused(mc, a
     mc.login_as("tok-ben", "ben@aurora.example")
     api.on("GET", "/me", ok(BEN_ME))
     message = "You have an accepted assignment on Deep Space Comms Upgrade overlapping 1–3 Apr"
-    api.on("POST", "/crew/7/unavailability", error(409, "overlap", message))
+    api.on(
+        "POST",
+        "/crew/7/unavailability",
+        error(409, "rule_violation", message, [problem("overlap", message, crew_profile_id=7,
+              mission_id=6, mission_name="Deep Space Comms Upgrade")]),
+    )  # fmt: skip
 
     result = mc("me", "unavailable", "add", "--start", "2027-04-01", "--end", "2027-04-03",
                 "--reason", "Leave")  # fmt: skip
@@ -350,7 +408,7 @@ def test_ac23_set_skill_by_email_and_skill_name(mc, api):
     mc.login_as()
     api.on("GET", "/crew", ok(CREW))
     api.on("GET", "/skills", ok(SKILLS))
-    api.on("PUT", "/crew/6/skills/1", ok(CREW[0]))
+    api.on("PUT", "/crew/6/skills/1", ok({"skill_id": 1, "skill_name": "Piloting", "level": 4}))
 
     result = mc("crew", "set-skill", "ana@aurora.example", "piloting", "4")
 
@@ -375,6 +433,36 @@ def test_ac23_own_skills_are_refused_by_the_server(mc, api):
     assert result.stderr == "✗ You can't change your own skill levels.\n"
 
 
+BEN_ONLY = [c for c in CREW if c["crew_profile_id"] == 7]  # Crew see only their own profile
+SKILLS_FORBIDDEN = error(403, "role_forbidden", "Crew can't view the skill catalogue")
+
+
+def test_ac23_crew_are_told_who_can_set_skill_levels(mc, api):
+    mc.login_as("tok-ben", "ben@aurora.example")
+    api.on("GET", "/crew", ok(BEN_ONLY))
+    api.on("GET", "/skills", SKILLS_FORBIDDEN)
+
+    own = mc("crew", "set-skill", "ben@aurora.example", "Piloting", "5")
+    other = mc("crew", "set-skill", "ana@aurora.example", "Piloting", "5")
+
+    for result in (own, other):
+        assert result.exit_code == 1
+        assert result.stderr == "✗ Only Mission Leads and Directors can change skill levels.\n"
+    assert api.writes() == []
+
+
+def test_ac23_crew_are_told_who_can_remove_skill_levels(mc, api):
+    mc.login_as("tok-ben", "ben@aurora.example")
+    api.on("GET", "/crew", ok(BEN_ONLY))
+    api.on("GET", "/skills", SKILLS_FORBIDDEN)
+
+    result = mc("crew", "unset-skill", "ben@aurora.example", "EVA")
+
+    assert result.exit_code == 1
+    assert result.stderr == "✗ Only Mission Leads and Directors can change skill levels.\n"
+    assert api.writes() == []
+
+
 def test_p3_unset_skill(mc, api):
     mc.login_as()
     api.on("GET", "/crew", ok(CREW))
@@ -397,7 +485,7 @@ def test_m16_crew_history(mc, api):
     assert result.exit_code == 0
     assert result.stdout == (
         "  Assignment   Mission                  Slot              Dates           Status\n"
-        "  21           Lunar Gateway Resupply   Flight Engineer   1–10 Mar 2027   declined\n"
+        "  21           Lunar Gateway Resupply   Flight Engineer   1–10 Mar 2027   Declined\n"
     )
 
 
@@ -424,6 +512,22 @@ def test_p10_add_user_asks_for_the_initial_password_twice(mc, api):
         "password": "a long first passphrase",
     }
     assert result.stdout == "✓ Added Zoe Lin (zoe@aurora.example) as a Crew Member.\n"
+    assert result.stderr == "Next: mc login --email zoe@aurora.example    (for Zoe)\n"
+
+
+def test_p10_add_user_without_a_terminal_reads_the_password_once(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    created = {"id": 20, "email": "zoe@aurora.example", "name": "Zoe Lin", "role": "crew",
+               "active": True}  # fmt: skip
+    api.on("POST", "/users", ok(created, status=201))
+
+    result = mc(
+        "users", "add", "--email", "zoe@aurora.example", "--name", "Zoe Lin", "--role", "crew",
+        input="a long first passphrase\n",
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.stderr
+    assert api.sent("POST", "/users")[0].body["password"] == "a long first passphrase"
 
 
 def test_m16_role_must_be_one_of_the_three(mc, api):
@@ -442,8 +546,9 @@ def test_ac26_last_director_cannot_be_demoted(mc, api):
     api.on(
         "PATCH",
         "/users/1",
-        error(409, "last_director", "Ruth Adeyemi is the last active Director"),
-    )
+        error(409, "rule_violation", "Ruth Adeyemi is the last active Director",
+              [problem("last_director", "Ruth Adeyemi is the last active Director", user_id=1)]),
+    )  # fmt: skip
 
     result = mc("users", "set-role", "ruth@aurora.example", "lead")
 
@@ -452,22 +557,66 @@ def test_ac26_last_director_cannot_be_demoted(mc, api):
     assert result.stderr.startswith("✗ Ruth Adeyemi is the last active Director.\n")
 
 
-def test_p7_deactivate_user(mc, api):
+DEACTIVATE_WARNING = "! Deactivating Chen Wu can't be undone: they won't be able to log in.\n"
+
+
+def test_p7_deactivate_user_asks_first(mc, api):
     mc.login_as("tok-ruth", "ruth@aurora.example")
     api.on("GET", "/users", ok(USERS))
     api.on("PATCH", "/users/8", ok(USERS[3] | {"active": False}))
 
-    result = mc("users", "deactivate", "chen@aurora.example")
+    result = mc("users", "deactivate", "chen@aurora.example", answers=["y"])
 
     assert result.exit_code == 0, result.stderr
+    assert result.stderr == DEACTIVATE_WARNING
+    assert result.asked == [("Deactivate Chen Wu? [y/N]", False)]
     assert api.sent("PATCH", "/users/8")[0].body == {"active": False}
+    assert result.stdout == "✓ Deactivated Chen Wu. They can no longer log in.\n"
+
+
+def test_p7_declining_to_deactivate_changes_nothing(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    api.on("GET", "/users", ok(USERS))
+
+    result = mc("users", "deactivate", "chen@aurora.example", answers=["n"])
+
+    assert result.exit_code == 1
+    assert "Nothing was changed." in result.stderr
+    assert api.writes() == []
+
+
+def test_p7_deactivate_without_a_terminal_needs_yes(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    api.on("GET", "/users", ok(USERS))
+
+    result = mc("users", "deactivate", "chen@aurora.example")
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(DEACTIVATE_WARNING)
+    assert "Re-run with --yes" in result.stderr
+    assert api.writes() == []
+
+
+def test_p7_deactivate_with_yes_does_not_ask(mc, api):
+    mc.login_as("tok-ruth", "ruth@aurora.example")
+    api.on("GET", "/users", ok(USERS))
+    api.on("PATCH", "/users/8", ok(USERS[3] | {"active": False}))
+
+    result = mc("users", "deactivate", "chen@aurora.example", "-y", answers=[])
+
+    assert result.exit_code == 0, result.stderr
+    assert result.asked == []
     assert result.stdout == "✓ Deactivated Chen Wu. They can no longer log in.\n"
 
 
 def test_p9_enable_crew(mc, api):
     mc.login_as("tok-ruth", "ruth@aurora.example")
     api.on("GET", "/users", ok(USERS))
-    api.on("POST", "/users/4/crew-profile", ok({"crew_profile_id": 4}, status=201))
+    api.on(
+        "POST",
+        "/users/4/crew-profile",
+        ok({"crew_profile_id": 4, "user_id": 4, "name": "Lee Park", "bio": None}, status=201),
+    )
 
     result = mc("users", "enable-crew", "lee@aurora.example")
 
@@ -520,7 +669,12 @@ def test_p1_skills_add_rename_remove(mc, api):
 def test_p1_used_skill_cannot_be_removed(mc, api):
     mc.login_as("tok-ruth", "ruth@aurora.example")
     api.on("GET", "/skills", ok(SKILLS))
-    api.on("DELETE", "/skills/4", error(409, "skill_in_use", "EVA is still in use"))
+    api.on(
+        "DELETE",
+        "/skills/4",
+        error(409, "rule_violation", "EVA is still in use",
+              [problem("skill_in_use", "EVA is still in use", skill_id=4)]),
+    )  # fmt: skip
 
     result = mc("skills", "remove", "EVA")
 

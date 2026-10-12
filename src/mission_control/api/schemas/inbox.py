@@ -43,7 +43,9 @@ class MissionItemOut(BaseModel):
     end_date: date
     unfilled: list[UnfilledSlotOut]
     unanswered: int
-    ready: bool  # every place filled and every proposal accepted
+    eligible_approvers: int
+    approvals_required: int
+    ready: bool  # places filled, proposals accepted, and enough Directors could approve
 
     @classmethod
     def of(cls, m: MissionItem) -> "MissionItemOut":
@@ -54,6 +56,8 @@ class MissionItemOut(BaseModel):
             end_date=m.window.end,
             unfilled=[UnfilledSlotOut.of(u) for u in m.unfilled],
             unanswered=m.unanswered,
+            eligible_approvers=m.eligible_approvers,
+            approvals_required=m.approvals_required,
             ready=m.ready,
         )
 

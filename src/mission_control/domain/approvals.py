@@ -25,17 +25,16 @@ def conflict_problems(
     return problems
 
 
-def approver_problems(
-    approver: Approver,
+def decision_problems(
+    user_id: int,
     created_by_id: int | None,
     rostered_user_ids: Set[int],
     decided_this_round: Set[int],
 ) -> list[Problem]:
-    """Every reason `approver` can't approve or reject this round. Empty means they can."""
-    if not approver.is_director:
-        return [Problem("role_forbidden", "Only Directors can approve or reject missions")]
-    problems = conflict_problems(approver.user_id, created_by_id, rostered_user_ids)
-    if approver.user_id in decided_this_round:
+    """Why this Director can't decide this round: they created the mission, are on it, or have
+    already decided. Empty means they still can."""
+    problems = conflict_problems(user_id, created_by_id, rostered_user_ids)
+    if user_id in decided_this_round:
         # A rejection ends the round, so anyone who has decided an open round approved it.
         problems.append(Problem("already_decided", "You've already approved this round"))
     return problems

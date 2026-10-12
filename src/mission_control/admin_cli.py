@@ -10,20 +10,19 @@ import sys
 import unicodedata
 from collections.abc import Generator
 from contextlib import contextmanager
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from typer.core import TyperGroup
 
+from mission_control.cli.base import HelpWhenBare, version_flag
 from mission_control.domain.enums import Role
 from mission_control.domain.passwords import (
     MIN_PASSWORD_LENGTH,
     PasswordTooShort,
     validate_password,
 )
-from mission_control.infra import security
+from mission_control.infra import platform, security
 from mission_control.infra.db import DatabaseBusy, UnsupportedSQLite, connect, init_db, write_tx
 from mission_control.infra.repositories import Repos
 from mission_control.infra.settings import Settings
@@ -31,7 +30,7 @@ from mission_control.seed import data
 from mission_control.seed.loader import load_seed
 
 OK, FAILED, USAGE, INTERRUPTED = 0, 1, 2, 130
-_RESET = "mc-admin seed --reset (deletes everything in it)"
+_RESET = "uv run mc-admin seed --reset (deletes everything in it)"
 
 
 class Failure(Exception):
@@ -44,15 +43,9 @@ class Failure(Exception):
         self.exit_code = exit_code
 
 
-class _Group(TyperGroup):
+class _Group(HelpWhenBare):
     """A bare `mc-admin` prints its help and exits 0. Failures are reported in words with their
     exit code, never as a traceback."""
-
-    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
-        if not args and not ctx.resilient_parsing:
-            typer.echo(ctx.get_help())
-            ctx.exit(OK)
-        return super().parse_args(ctx, args)
 
     def invoke(self, ctx: typer.Context) -> Any:
         try:
@@ -80,25 +73,11 @@ def _example(*lines: str) -> str:
     return "\b\n" + heading + "\n" + "\n".join(f"  {line}" for line in lines)
 
 
-def _show_version(value: bool) -> None:
-    if value:
-        try:
-            number = version("mission-control")
-        except PackageNotFoundError:
-            number = "unknown"
-        typer.echo(f"mc-admin {number}")
-        raise typer.Exit()
+Version = Annotated[bool, version_flag("mc-admin")]
 
 
 @app.callback()
-def root(
-    show_version: Annotated[
-        bool,
-        typer.Option(
-            "--version", help="Show the version and exit", callback=_show_version, is_eager=True
-        ),
-    ] = False,
-) -> None:
+def root(show_version: Version = False) -> None:
     """Operator commands for Mission Control.
 
     They work on the database file directly, so run them on the machine that runs mc-server.
@@ -120,7 +99,7 @@ def init_database() -> None:
         created = _prepare(conn, path)
     if created:
         typer.echo(f"Created an empty database at {path}.")
-        _next_steps(["mc-admin seed", "mc-admin create-org --help"])
+        _next_steps(["uv run mc-admin seed", "uv run mc-admin create-org --help"])
     else:
         typer.echo(f"The database at {path} is already set up.")
 
@@ -159,7 +138,7 @@ def seed(
         f"  {len(data.ORGANISATIONS)} organisations, {len(data.USERS)} users and "
         f'{len(data.MISSIONS)} missions. Every user\'s password is "{data.DEMO_PASSWORD}".'
     )
-    _next_steps(["mc-server", "mc login --email lee@aurora.example"])
+    _next_steps(["uv run mc-server", "uv run mc login --email lee@aurora.example"])
 
 
 @app.command(
@@ -212,7 +191,7 @@ def create_org(
         password_hash = security.hash_password(password)  # slow, so before the write lock
         with write_tx(conn):
             _refuse_if_taken(conn, slug, email)  # again, now that nothing else can write
-            org_id = _insert_organisation(conn, org_name, slug)
+            org_id = platform.create_organisation(conn, org_name, slug)
             repos = Repos(conn, org_id)
             repos.users.create(email, person, Role.DIRECTOR, password_hash)
             approvals = repos.organisation.get().required_approvals
@@ -224,9 +203,9 @@ def create_org(
     )
     _next_steps(
         [
-            f"mc login --email {email}",
-            "mc skills add NAME",
-            "mc users add --email EMAIL --name NAME --role lead",
+            f"uv run mc login --email {email}",
+            "uv run mc skills add NAME",
+            "uv run mc users add --email EMAIL --name NAME --role lead",
         ]
     )
 
@@ -270,7 +249,7 @@ def _database(settings: Settings) -> Generator[sqlite3.Connection]:
             raise
         raise Failure(
             f"{path} isn't a Mission Control database. Nothing was changed.",
-            hint="Set MC_DATABASE_PATH to another file, or replace it: mc-admin seed --reset",
+            hint=f"Set MC_DATABASE_PATH to another file, or start over: {_RESET}",
         ) from None
     finally:
         conn.close()
@@ -279,8 +258,7 @@ def _database(settings: Settings) -> Generator[sqlite3.Connection]:
 def _prepare(conn: sqlite3.Connection, path: Path) -> bool:
     """Make sure the schema is there. True if it was created just now."""
     try:
-        empty = conn.execute("PRAGMA user_version").fetchone()[0] == 0
-        init_db(conn)
+        return init_db(conn)
     except UnsupportedSQLite as e:
         raise Failure(f"{e}.", hint="Use a Python built with a newer SQLite.") from None
     except RuntimeError as e:  # a schema version this code doesn't know
@@ -288,7 +266,6 @@ def _prepare(conn: sqlite3.Connection, path: Path) -> bool:
             f"The database at {path} can't be used: {e}.",
             hint=f"Set MC_DATABASE_PATH to another file, or start over: {_RESET}",
         ) from None
-    return empty
 
 
 def _delete_database(path: Path) -> bool:
@@ -307,7 +284,7 @@ def _delete_database(path: Path) -> bool:
 
 
 def _refuse_if_taken(conn: sqlite3.Connection, slug: str, email: str) -> None:
-    existing = _organisation_with_slug(conn, slug)
+    existing = platform.organisation_with_slug(conn, slug)
     if existing is not None:
         raise Failure(
             f"An organisation called {existing} already exists. Nothing was changed.",
@@ -319,20 +296,6 @@ def _refuse_if_taken(conn: sqlite3.Connection, slug: str, email: str) -> None:
             f"The email address {email} is already in use. Nothing was changed.",
             hint="Use another email address for this organisation's Director.",
         )
-
-
-# Organisations are created only here and by the seed, before any tenant exists to scope by.
-
-
-def _organisation_with_slug(conn: sqlite3.Connection, slug: str) -> str | None:
-    row = conn.execute("SELECT name FROM organisations WHERE slug = ?", (slug,)).fetchone()
-    return row[0] if row else None
-
-
-def _insert_organisation(conn: sqlite3.Connection, name: str, slug: str) -> int:
-    cursor = conn.execute("INSERT INTO organisations(name, slug) VALUES (?, ?)", (name, slug))
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
 
 
 # --- Input and output ---------------------------------------------------------------------

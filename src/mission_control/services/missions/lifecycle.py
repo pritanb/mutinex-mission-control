@@ -3,13 +3,13 @@ its assignments follow in the same transaction: completing it completes the acce
 cancelling it cancels every proposal and acceptance."""
 
 from mission_control.domain.enums import Action
-from mission_control.domain.errors import InvalidInput
 from mission_control.domain.events import Event
-from mission_control.domain.lifecycle import StateConflict, mission_status_after, state_problem
+from mission_control.domain.lifecycle import mission_status_after, require_state
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import Mission
 from mission_control.services.assignments import cascade_mission_end
 from mission_control.services.context import ServiceContext, mission_context, visible_mission
+from mission_control.services.inputs import required_reason
 from mission_control.services.missions.loading import reload
 from mission_control.services.missions.views import MissionView, mission_view
 
@@ -25,17 +25,14 @@ def cancel_mission(ctx: ServiceContext, mission_id: int, reason: str | None) -> 
     """The owner or a Director cancels a mission that isn't finished, giving a reason."""
     with ctx.write() as repos:
         mission = _open_to_end(ctx, repos, mission_id, Action.CANCEL)
-        given = (reason or "").strip()
-        if not given:
-            raise InvalidInput(f"Cancelling {mission.name} needs a reason")
+        given = required_reason(reason, f"Cancelling {mission.name}")
         return _end(ctx, repos, mission, Action.CANCEL, Event.MISSION_CANCELLED, given)
 
 
 def _open_to_end(ctx: ServiceContext, repos: Repos, mission_id: int, action: Action) -> Mission:
     mission = visible_mission(ctx, repos, mission_id)
     ctx.authorize(action, mission_context(repos, mission))
-    if problem := state_problem(mission.status, action):
-        raise StateConflict(problem)
+    require_state(mission.status, action)
     return mission
 
 
@@ -58,5 +55,5 @@ def _end(
         reason=reason,
         data={"mission_name": mission.name},
     )
-    cascade_mission_end(ctx, mission, after)
+    cascade_mission_end(ctx, repos, mission, after)
     return mission_view(repos, reload(repos, mission))

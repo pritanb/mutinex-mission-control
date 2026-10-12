@@ -38,6 +38,7 @@ from mission_control.services.missions.slots import (
 from mission_control.services.missions.views import (
     ApprovalView,
     AssignmentView,
+    MissionListItem,
     MissionView,
     SlotView,
 )
@@ -45,6 +46,7 @@ from mission_control.services.missions.views import (
 __all__ = [
     "ApprovalView",
     "AssignmentView",
+    "MissionListItem",
     "MissionView",
     "SlotInput",
     "SlotView",

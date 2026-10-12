@@ -46,6 +46,7 @@ AURORA = Ids(
     users=set(range(1, 14)),
     skills=set(range(1, 7)),
     missions=set(range(1, 8)),
+    slots=set(range(1, 12)),
 )
 HELIX = Ids(
     org=2,
@@ -62,6 +63,7 @@ HELIX = Ids(
     users=set(range(14, 20)),
     skills=set(range(7, 11)),
     missions={8},
+    slots={12, 13},
 )
 
 # (first name, org, role letter, own crew profile id or None)
@@ -77,6 +79,10 @@ CALLERS = [
 
 def _slot(skill):
     return {"name": "Probe", "headcount": 1, "requirements": [{"skill_id": skill, "min_level": 1}]}
+
+
+def _requirements(skill):
+    return {"requirements": [{"skill_id": skill, "min_level": 1}]}
 
 
 def _mission(skill, owner=None):
@@ -97,8 +103,11 @@ def _mission(skill, owner=None):
 def variants(me, o, own_crew, x):
     v = [
         ("PATCH", f"/users/{x(o.user)}", {"role": "lead"}, "LC"),
+        ("PATCH", f"/users/{x(o.user)}", {"active": False}, "LC"),
+        ("PATCH", f"/users/{x(o.user)}", {}, "LC"),  # no change: shows the user
         ("POST", f"/users/{x(o.no_profile_user)}/crew-profile", {}, "LC"),
         ("PATCH", f"/skills/{x(o.skill)}", {"name": "Renamed"}, "LC"),
+        ("PATCH", f"/skills/{x(o.skill)}", {"category": "x"}, "LC"),
         ("DELETE", f"/skills/{x(o.skill)}", None, "LC"),
         ("GET", f"/crew/{x(o.crew)}", None, ""),
         ("PATCH", f"/crew/{x(o.crew)}", {"bio": "Hi"}, ""),
@@ -124,6 +133,9 @@ def variants(me, o, own_crew, x):
         ("POST", f"/missions/{me.mission}/slots", _slot(x(o.skill)), "D"),
         ("PATCH", f"/missions/{x(o.mission)}/slots/{x(o.slot)}", {"headcount": 2}, ""),
         ("PATCH", f"/missions/{me.mission}/slots/{x(o.slot)}", {"headcount": 2}, ""),
+        ("PATCH", f"/missions/{x(o.mission)}/slots/{x(o.slot)}", _requirements(me.skill), ""),
+        ("PATCH", f"/missions/{me.mission}/slots/{x(o.slot)}", _requirements(me.skill), ""),
+        ("PATCH", f"/missions/{me.mission}/slots/{me.slot}", _requirements(x(o.skill)), "D"),
         ("DELETE", f"/missions/{x(o.mission)}/slots/{x(o.slot)}", None, ""),
         ("DELETE", f"/missions/{me.mission}/slots/{x(o.slot)}", None, ""),
         ("POST", f"/missions/{x(o.mission)}/owner", {"owner_id": me.lead}, ""),
@@ -210,6 +222,16 @@ def kai_unavailable(db):
     )
 
 
+@pytest.fixture
+def open_proposals(db):
+    """A proposal waiting on a crew member in each organisation, so both inboxes have one:
+    Ben for Gateway's Flight Engineer, Kai for Payload Demo's Payload Specialist."""
+    db.execute(
+        "INSERT INTO assignments(org_id, mission_id, slot_id, crew_profile_id, proposed_by_id,"
+        " status) VALUES (1, 1, 1, 7, 4, 'proposed'), (2, 8, 12, 16, 15, 'proposed')"
+    )
+
+
 def test_s9_route_inventory_every_endpoint_is_in_the_sweep(client):
     swept = {
         (method, _template(f"{API}{path}"))
@@ -244,7 +266,7 @@ def test_s9_ac27_ac29_foreign_ids_look_missing_and_change_nothing(
 
 @pytest.mark.parametrize(("who", "org", "role", "own_crew"), CALLERS, ids=[c[0] for c in CALLERS])
 def test_s9_ac28_every_list_holds_only_the_callers_organisation(
-    client, login, who, org, role, own_crew
+    client, login, db, open_proposals, who, org, role, own_crew
 ):
     me = AURORA if org == "aurora" else HELIX
     headers = login(who)
@@ -273,6 +295,22 @@ def test_s9_ac28_every_list_holds_only_the_callers_organisation(
     assert assignments <= me.missions
     if role != "C":
         assert missions == me.missions
+
+    inbox = get("/me/inbox").json()
+    inbox_missions = {
+        item["mission_id"]
+        for part in ("proposals", "approvals", "missions")
+        for item in inbox[part]
+    }
+    assert inbox_missions <= me.missions
+    own_assignments = {
+        r[0] for r in db.execute("SELECT id FROM assignments WHERE org_id = ?", (me.org,))
+    }
+    proposals = {p["assignment_id"] for p in inbox["proposals"]}
+    assert proposals <= own_assignments
+    if role == "C":
+        assert proposals, "the crew member's own proposal is listed"
+    assert {s["slot_id"] for m in inbox["missions"] for s in m["unfilled"]} <= me.slots
 
 
 def test_ac31_s9_helix_kai_is_never_suggested_for_an_aurora_piloting_slot(client, login):

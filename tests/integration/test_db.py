@@ -90,6 +90,15 @@ def test_init_is_idempotent(db_path, conn):
         again.close()
 
 
+def test_init_says_whether_it_created_the_schema(db_path):
+    fresh = connect(db_path)
+    try:
+        assert init_db(fresh) is True
+        assert init_db(fresh) is False
+    finally:
+        fresh.close()
+
+
 def test_init_refuses_an_unknown_newer_schema_version(db_path, conn):
     conn.execute("PRAGMA user_version = 99")
     with pytest.raises(RuntimeError, match="99"):

@@ -170,10 +170,32 @@ def test_ac22_apply_creates_proposals_and_names_them(mc, api):
         "/missions/1/match/apply",
         ok(
             [
-                {"id": 21, "slot_id": 3, "crew_profile_id": 6, "status": "proposed"},
-                {"id": 22, "slot_id": 1, "crew_profile_id": 8, "status": "proposed"},
-                {"id": 23, "slot_id": 2, "crew_profile_id": 9, "status": "proposed"},
-            ]
+                {
+                    "id": 21,
+                    "mission_id": 1,
+                    "slot_id": 3,
+                    "crew_profile_id": 6,
+                    "status": "proposed",
+                    "reason": None,
+                },
+                {
+                    "id": 22,
+                    "mission_id": 1,
+                    "slot_id": 1,
+                    "crew_profile_id": 8,
+                    "status": "proposed",
+                    "reason": None,
+                },
+                {
+                    "id": 23,
+                    "mission_id": 1,
+                    "slot_id": 2,
+                    "crew_profile_id": 9,
+                    "status": "proposed",
+                    "reason": None,
+                },
+            ],
+            status=201,
         ),
     )
     proposed = [
@@ -203,7 +225,7 @@ def test_ac22_apply_creates_proposals_and_names_them(mc, api):
 
 def test_m16_apply_with_nothing_to_propose(mc, api):
     mc.login_as()
-    api.on("POST", "/missions/2/match/apply", ok([]))
+    api.on("POST", "/missions/2/match/apply", ok([], status=201))
 
     result = mc("missions", "match", "2", "--apply")
 

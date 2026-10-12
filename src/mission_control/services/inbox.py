@@ -5,14 +5,20 @@ inbox, showing whichever sections apply to them:
 - proposals waiting for their reply (anyone with a crew profile);
 - pending missions they could still approve (Directors who didn't create the mission, aren't
   on it, and haven't approved this round);
-- their own Draft missions, with the places still to fill and the proposals awaiting replies.
+- their own Draft missions, with the places still to fill, the proposals awaiting replies, and
+  how many Directors could approve against how many are required.
 
-The missions section counts places and replies only. Whether the crew are still eligible, and
-whether enough Directors could approve, is checked when the mission is submitted.
+The missions section counts places, replies and eligible approvers only. Whether the accepted
+crew are still eligible is checked when the mission is submitted.
 """
 
 from dataclasses import dataclass
 
+from mission_control.domain.approvals import (
+    Approver,
+    count_eligible_approvers,
+    decision_problems,
+)
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus, Role
 from mission_control.infra.repositories import Repos
@@ -47,11 +53,18 @@ class MissionItem:
     window: DateRange
     unfilled: tuple[UnfilledSlot, ...]  # slots with open places, in listed order
     unanswered: int  # proposals the crew haven't replied to yet
+    eligible_approvers: int  # active Directors who didn't create the mission and aren't on it
+    approvals_required: int  # the organisation's current setting, saved when it's submitted
 
     @property
     def ready(self) -> bool:
-        """Every place is filled and every proposal accepted, so the owner can submit."""
-        return not self.unfilled and self.unanswered == 0
+        """Every place is filled, every proposal accepted, and enough Directors could approve,
+        so the owner can submit."""
+        return (
+            not self.unfilled
+            and self.unanswered == 0
+            and self.eligible_approvers >= self.approvals_required
+        )
 
 
 @dataclass(frozen=True)
@@ -88,10 +101,10 @@ def _approvals(ctx: ServiceContext, repos: Repos) -> tuple[ApprovalItem, ...]:
     me = ctx.actor.user_id
     items = []
     for m in repos.missions.with_status(MissionStatus.PENDING_APPROVAL):
-        if me == m.created_by_id or me in repos.missions.rostered_user_ids(m.id):
-            continue
         decisions = repos.approvals.for_round(m.id, m.approval_round)
-        if any(d.director_id == me for d in decisions):
+        decided = {d.director_id for d in decisions}
+        rostered = repos.missions.rostered_user_ids(m.id)
+        if decision_problems(me, m.created_by_id, rostered, decided):
             continue
         approved = sum(1 for d in decisions if d.decision == "approve")
         items.append(ApprovalItem(m.id, m.name, m.window, approved, m.approvals_required or 0))
@@ -99,15 +112,25 @@ def _approvals(ctx: ServiceContext, repos: Repos) -> tuple[ApprovalItem, ...]:
 
 
 def _missions(ctx: ServiceContext, repos: Repos) -> tuple[MissionItem, ...]:
+    drafts = [
+        m
+        for m in repos.missions.non_final_owned_by(ctx.actor.user_id)
+        if m.status == MissionStatus.DRAFT
+    ]
+    if not drafts:
+        return ()
+    required = repos.organisation.get().required_approvals
+    people = [Approver(u.id, u.role == Role.DIRECTOR, u.is_active) for u in repos.users.list()]
     items = []
-    for m in repos.missions.non_final_owned_by(ctx.actor.user_id):
-        if m.status != MissionStatus.DRAFT:
-            continue
+    for m in drafts:
         unfilled = tuple(
             UnfilledSlot(s.id, s.name, s.open_places)
             for s in repos.facts.slot_specs(m.id)
             if s.open_places > 0
         )
         unanswered = len(repos.missions.assignments(m.id, (AssignmentStatus.PROPOSED,)))
-        items.append(MissionItem(m.id, m.name, m.window, unfilled, unanswered))
+        eligible = count_eligible_approvers(
+            people, m.created_by_id, repos.missions.rostered_user_ids(m.id)
+        )
+        items.append(MissionItem(m.id, m.name, m.window, unfilled, unanswered, eligible, required))
     return tuple(items)

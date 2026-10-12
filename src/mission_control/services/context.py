@@ -16,7 +16,7 @@ from mission_control.domain.events import Event
 from mission_control.domain.permissions import NO_CONTEXT, Action, Actor, Context, authorize
 from mission_control.infra.db import read_tx, write_tx
 from mission_control.infra.repositories import Repos
-from mission_control.infra.repositories.models import Mission
+from mission_control.infra.repositories.models import CrewProfile, Mission
 
 
 class ServiceContext:
@@ -80,6 +80,12 @@ def mission_context(repos: Repos, mission: Mission) -> Context:
         created_by_id=mission.created_by_id,
         rostered_user_ids=repos.missions.rostered_user_ids(mission.id),
     )
+
+
+def profile_context(profile: CrewProfile) -> Context:
+    """Permission context for a crew profile, or for an assignment it holds: the person is the
+    profile's user, not the profile id."""
+    return Context(target_user_id=profile.user_id)
 
 
 def return_to_draft(

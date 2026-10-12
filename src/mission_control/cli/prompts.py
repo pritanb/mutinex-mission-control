@@ -1,5 +1,5 @@
 """Asking the user things. Prompts go to the terminal (stderr, or the tty for passwords), never to
-stdout. Passwords are read with the input hidden, or from stdin, one line per prompt, when
+stdout. Passwords are read with the input hidden, or from stdin, one line per password, when
 there's no terminal."""
 
 import getpass
@@ -59,9 +59,10 @@ def ask_secret(env: "Env", label: str) -> str:
 
 
 def ask_new_secret(env: "Env", label: str, repeat: str, *, mismatch: str) -> str:
-    """A password being set: asked twice, and both answers must match."""
+    """A password being set. On a terminal it's asked twice, and both answers must match, to catch
+    a typo nobody could see. Piped, it's read once."""
     first = ask_secret(env, label)
-    if first != ask_secret(env, repeat):
+    if env.is_interactive and first != ask_secret(env, repeat):
         raise UsageProblem(mismatch)
     return first
 

@@ -6,6 +6,7 @@
 there, so clients only ever read one format.
 """
 
+import logging
 from collections.abc import Sequence
 from http import HTTPStatus
 from typing import Any
@@ -26,6 +27,8 @@ from mission_control.domain.errors import (
 )
 from mission_control.domain.passwords import MIN_PASSWORD_LENGTH, PasswordTooShort
 from mission_control.infra.db import DatabaseBusy
+
+log = logging.getLogger(__name__)
 
 VALIDATION_ERROR = "validation_error"
 _SEVERAL_MISTAKES = "Some values aren't valid"
@@ -99,7 +102,16 @@ def install(app: FastAPI) -> None:
         if e.status_code == 404:
             return error_response(404, NotFound.code, "Not found")
         phrase = HTTPStatus(e.status_code).phrase
-        return error_response(e.status_code, phrase.lower().replace(" ", "_"), phrase)
+        code = phrase.lower().replace(" ", "_")  # e.g. 405 method_not_allowed
+        return error_response(e.status_code, code, phrase, headers=e.headers)
+
+    @app.exception_handler(Exception)
+    def _unexpected(request: Request, e: Exception) -> JSONResponse:
+        """A bug, not a refusal. Only exceptions no handler above claims reach here. The
+        details stay on the server, never in the response: this names the request, and Starlette
+        re-raises the exception once the response is sent, so the server logs its traceback."""
+        log.error("Unhandled %s on %s %s", type(e).__name__, request.method, request.url.path)
+        return error_response(500, "internal_error", "Something went wrong on the server")
 
 
 # Malformed requests. Pydantic's own wording is replaced for the common cases, so a refusal

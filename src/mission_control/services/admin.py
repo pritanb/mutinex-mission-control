@@ -6,13 +6,13 @@ transaction, so the checks see the same data the write changes. Audit `data` kee
 that applied at the time.
 """
 
-from collections.abc import Iterable
 from enum import Enum
 
 from mission_control.domain.enums import Action, Role
 from mission_control.domain.errors import InvalidInput, Problem, RuleViolation
 from mission_control.domain.events import Event
 from mission_control.domain.passwords import validate_password
+from mission_control.domain.wording import join_names
 from mission_control.infra import security
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import (
@@ -23,6 +23,7 @@ from mission_control.infra.repositories.models import (
     User,
 )
 from mission_control.services.context import ServiceContext, check, found
+from mission_control.services.inputs import invalid, refuse_input
 
 
 class _Keep(Enum):
@@ -53,7 +54,7 @@ def set_required_approvals(ctx: ServiceContext, n: int) -> Organisation:
         repos.organisation.set_required_approvals(n)
         ctx.audit(
             Event.ORG_REQUIRED_APPROVALS_CHANGED,
-            data={"from": current.required_approvals, "to": n},
+            data={"changes": {"required_approvals": [current.required_approvals, n]}},
         )
         return repos.organisation.get()
 
@@ -75,15 +76,20 @@ def create_user(ctx: ServiceContext, email: str, name: str, role: Role, password
     """A Director sets the initial password. A new Crew Member gets a crew profile straight
     away; Leads and Directors get one only on request."""
     ctx.authorize(Action.MANAGE_ORG)
-    email = _required(email, "email address")
-    name = _required(name, "name")
+    email, name = email.strip(), name.strip()
+    refuse_input(_blank(email, "email address") + _blank(name, "name"))
     validate_password(password)
     password_hash = security.hash_password(password)  # slow, so before the write lock
     with ctx.write() as repos:
         # Emails are unique across every organisation, because login is by email alone.
         if security.find_login(ctx.conn, email) is not None:
-            message = f"The email address {email} is already in use"
-            raise RuleViolation(message, [Problem("already_exists", message, {"email": email})])
+            raise RuleViolation.of(
+                Problem(
+                    "already_exists",
+                    f"The email address {email} is already in use",
+                    {"email": email},
+                )
+            )
         user = repos.users.create(email, name, role, password_hash)
         ctx.audit(
             Event.USER_CREATED,
@@ -100,22 +106,18 @@ def create_crew_profile(
     """Give a Lead or Director a crew profile so they can take part in missions. The display
     name defaults to their first name. Profiles are never deleted."""
     ctx.authorize(Action.MANAGE_ORG)
-    if display_name is not None:
-        display_name = _required(display_name, "display name")
     with ctx.write() as repos:
         user = found(repos.users.get(user_id), "User")
+        if display_name is not None:
+            display_name = _required(display_name, "display name")
         existing = repos.crew.by_user(user.id)
         if existing is not None:
-            message = f"{user.name} already has a crew profile"
-            raise RuleViolation(
-                message,
-                [
-                    Problem(
-                        "already_exists",
-                        message,
-                        {"user_id": user.id, "crew_profile_id": existing.id},
-                    )
-                ],
+            raise RuleViolation.of(
+                Problem(
+                    "already_exists",
+                    f"{user.name} already has a crew profile",
+                    {"user_id": user.id, "crew_profile_id": existing.id},
+                )
             )
         return _give_crew_profile(ctx, repos, user, display_name)
 
@@ -142,8 +144,7 @@ def change_role(ctx: ServiceContext, user_id: int, role: Role) -> User:
             data={
                 "user_id": user.id,
                 "user_name": user.name,
-                "from_role": user.role,
-                "to_role": role,
+                "changes": {"role": [user.role, role]},
             },
         )
         if role == Role.CREW and repos.crew.by_user(user.id) is None:
@@ -199,7 +200,7 @@ def _has_open_assignments(repos: Repos, user: User, profile: CrewProfile) -> lis
     on = (
         f"an open assignment on {missions[0].name}"
         if len(missions) == 1
-        else f"open assignments on {_join(m.name for m in missions)}"
+        else f"open assignments on {join_names(m.name for m in missions)}"
     )
     return [
         Problem(
@@ -218,7 +219,7 @@ def _owns_open_missions(repos: Repos, user: User) -> list[Problem]:
     return [
         Problem(
             "owns_open_missions",
-            f"{user.name} still owns {_join(m.name for m in missions)};"
+            f"{user.name} still owns {join_names(m.name for m in missions)};"
             f" reassign {them} to another Lead first",
             {"user_id": user.id, "mission_ids": [m.id for m in missions]},
         )
@@ -274,26 +275,24 @@ def update_skill(
     follow it. A name left out stays as it is; so does the category unless one is given (None
     clears it)."""
     ctx.authorize(Action.MANAGE_SKILLS)
-    new_name = _required(name, "skill name") if name is not None else None
     with ctx.write() as repos:
         skill = found(repos.skills.get(skill_id), "Skill")
-        to_name = new_name if new_name is not None else skill.name
+        to_name = _required(name, "skill name") if name is not None else skill.name
         to_category = skill.category if isinstance(category, _Keep) else _optional(category)
         if (to_name, to_category) == (skill.name, skill.category):
             return skill
         clash = repos.skills.by_name(to_name)
         if clash is not None and clash.id != skill.id:
             raise _name_taken(clash)
+        changes: dict[str, list[str | None]] = {}
+        if to_name != skill.name:
+            changes["name"] = [skill.name, to_name]
+        if to_category != skill.category:
+            changes["category"] = [skill.category, to_category]
         repos.skills.update(skill.id, to_name, to_category)
         ctx.audit(
             Event.SKILL_UPDATED,
-            data={
-                "skill_id": skill.id,
-                "from_name": skill.name,
-                "to_name": to_name,
-                "from_category": skill.category,
-                "to_category": to_category,
-            },
+            data={"skill_id": skill.id, "skill_name": to_name, "changes": changes},
         )
         return found(repos.skills.get(skill.id), "Skill")
 
@@ -309,10 +308,10 @@ def delete_skill(ctx: ServiceContext, skill_id: int) -> None:
             reasons = []
             if holders:
                 has = "has" if len(holders) == 1 else "have"
-                reasons.append(f"{_join(h.name for h in holders)} {has} it")
+                reasons.append(f"{join_names(h.name for h in holders)} {has} it")
             if slots:
                 requires = "requires" if len(slots) == 1 else "require"
-                uses = _join(f"{s.mission_name} ({s.slot_name})" for s in slots)
+                uses = join_names(f"{s.mission_name} ({s.slot_name})" for s in slots)
                 reasons.append(f"{uses} {requires} it")
             raise RuleViolation.of(
                 Problem(
@@ -330,8 +329,13 @@ def delete_skill(ctx: ServiceContext, skill_id: int) -> None:
 
 
 def _name_taken(existing: Skill) -> RuleViolation:
-    message = f"The catalogue already has a skill called {existing.name}"
-    return RuleViolation(message, [Problem("already_exists", message, {"skill_id": existing.id})])
+    return RuleViolation.of(
+        Problem(
+            "already_exists",
+            f"The catalogue already has a skill called {existing.name}",
+            {"skill_id": existing.id},
+        )
+    )
 
 
 # --- Helpers ------------------------------------------------------------------------------
@@ -339,9 +343,12 @@ def _name_taken(existing: Skill) -> RuleViolation:
 
 def _required(value: str, what: str) -> str:
     stripped = value.strip()
-    if not stripped:
-        raise InvalidInput(f"The {what} can't be blank")
+    refuse_input(_blank(stripped, what))
     return stripped
+
+
+def _blank(value: str, what: str) -> list[Problem]:
+    return [] if value.strip() else [invalid(f"The {what} can't be blank")]
 
 
 def _optional(value: str | None) -> str | None:
@@ -350,11 +357,3 @@ def _optional(value: str | None) -> str | None:
 
 def _by_date(missions: list[Mission]) -> list[Mission]:
     return sorted(missions, key=lambda m: (m.window.start, m.id))
-
-
-def _join(names: Iterable[str]) -> str:
-    """'A', 'A and B', 'A, B and C'."""
-    items = list(names)
-    if len(items) <= 1:
-        return "".join(items)
-    return f"{', '.join(items[:-1])} and {items[-1]}"

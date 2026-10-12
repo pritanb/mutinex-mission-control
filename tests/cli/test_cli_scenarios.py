@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 
 import httpx2
-from cli_fakes import CREW, SKILLS, USERS, FakeApi, error, gateway, ok, problem
+from cli_fakes import CREW, SKILLS, USERS, FakeApi, error, gateway, ok, problem, session
 
 PEOPLE = {
     "ruth@aurora.example": (1, "Ruth Adeyemi", "director", None),
@@ -73,21 +73,27 @@ class Server:
             return error(401, "invalid_credentials", "Email or password is incorrect")
         token = f"tok-{body['email'].split('@')[0]}"
         self.tokens[token] = body["email"]
-        return ok({"token": token, "expires_at": "2099-01-01T00:00:00Z"})
+        return ok(session(token, self.record(PEOPLE[body["email"]]), "2099-01-01T00:00:00Z"))
 
-    def me(self, request, user) -> httpx2.Response:
+    @staticmethod
+    def record(user) -> dict:
         uid, name, role, cpid = user
         email = next(e for e, p in PEOPLE.items() if p == user)
-        return ok({"id": uid, "email": email, "name": name, "role": role, "active": True,
-                   "crew_profile_id": cpid,
-                   "organisation": {"id": 1, "name": "Aurora Space Agency"}})  # fmt: skip
+        return {"id": uid, "email": email, "name": name, "role": role, "active": True,
+                "crew_profile_id": cpid,
+                "organisation": {"id": 1, "name": "Aurora Space Agency",
+                                 "slug": "aurora"}}  # fmt: skip
+
+    def me(self, request, user) -> httpx2.Response:
+        return ok(self.record(user))
 
     def log(self, user, event, from_status=None, to_status=None) -> None:
         self.history.append(
             {"id": len(self.history) + 1,
              "created_at": f"2027-01-05T09:{len(self.history):02d}:00Z",
              "actor_id": user[0], "actor_name": user[1], "event": event,
-             "from_status": from_status, "to_status": to_status, "reason": None, "data": {}}
+             "assignment_id": None, "crew_profile_id": None, "from_status": from_status,
+             "to_status": to_status, "reason": None, "data": {}}
         )  # fmt: skip
 
     def mission(self) -> dict:
@@ -115,7 +121,8 @@ class Server:
                                      "status": "proposed", "reason": None}  # fmt: skip
             self.log(user, "assignment.proposed")
         return ok(
-            [{k: a[k] for k in ("id", "slot_id", "crew_profile_id", "status")}
+            [{"mission_id": 1, "reason": None,
+              **{k: a[k] for k in ("id", "slot_id", "crew_profile_id", "status")}}
              for a in self.assignments.values()],
             status=201,
         )  # fmt: skip
@@ -289,12 +296,15 @@ def test_s4_overlaps_and_unavailability_through_the_cli(mc, api):
     api.on("POST", "/missions/1/assignments", propose_gateway)
     api.on("POST", "/missions/3/assignments", propose_reboost)
     api.on("GET", "/assignments", ok([]))
-    api.on("POST", "/assignments/24/accept", ok({"id": 24, "status": "accepted"}))
+    api.on("POST", "/assignments/24/accept", ok({"id": 24, "mission_id": 3, "slot_id": 6,
+           "crew_profile_id": 8, "status": "accepted", "reason": None}))  # fmt: skip
     api.on(
         "POST",
         "/assignments/25/accept",
-        error(409, "overlap", "You have an accepted assignment on Station Reboost overlapping "
-              "1–2 Mar"),
+        error(409, "rule_violation", "Chen Wu can't accept Flight Engineer on Lunar Gateway "
+              "Resupply", [problem("overlap", "Chen Wu has an accepted assignment on Station "
+              "Reboost overlapping 1–2 Mar", crew_profile_id=8, mission_id=3,
+              mission_name="Station Reboost")]),
     )  # fmt: skip
 
     mc.login_as("tok-lee")
@@ -329,5 +339,6 @@ def test_s4_overlaps_and_unavailability_through_the_cli(mc, api):
     assert first.exit_code == 0
     assert second.exit_code == 1  # AC-15: names the conflicting mission
     assert second.stderr.startswith(
-        "✗ You have an accepted assignment on Station Reboost overlapping 1–2 Mar.\n"
+        "✗ Chen Wu can't accept Flight Engineer on Lunar Gateway Resupply.\n"
+        "  • Chen Wu has an accepted assignment on Station Reboost overlapping 1–2 Mar\n"
     )

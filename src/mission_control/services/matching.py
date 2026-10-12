@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import Action, AssignmentStatus
-from mission_control.domain.lifecycle import StateConflict, state_problem
+from mission_control.domain.lifecycle import require_state
 from mission_control.domain.matching import Suggestion, proficiency, suggest_roster
 from mission_control.domain.permissions import Context, can
 from mission_control.domain.records import CandidateFacts, SlotSpec
@@ -141,8 +141,7 @@ def _open(
     mission = visible_mission(ctx, repos, mission_id)
     about = mission_context(repos, mission)
     ctx.authorize(action, about)
-    if problem := state_problem(mission.status, action):
-        raise StateConflict(problem)
+    require_state(mission.status, action)
     return mission, about
 
 

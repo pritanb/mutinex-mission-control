@@ -16,7 +16,28 @@ from mission_control.infra.repositories.models import Slot
 _LIVE = "removed_at IS NULL"
 
 
-class MissionSlots(Scoped):
+class SlotRequirements(Scoped):
+    """Reading a mission's slot requirements, shared by the mission and fact repositories."""
+
+    def _requirements_by_slot(self, mission_id: int) -> dict[int, tuple[Requirement, ...]]:
+        """Every slot's requirements, removed slots included, by slot id and then skill id."""
+        rows = self._all(
+            """SELECT r.slot_id, r.skill_id, k.name, r.min_level FROM slot_requirements r
+               JOIN skills k ON k.org_id = r.org_id AND k.id = r.skill_id
+               JOIN slots s ON s.org_id = r.org_id AND s.id = r.slot_id
+               WHERE r.org_id = :org AND s.mission_id = :mission_id
+               ORDER BY r.slot_id, r.skill_id""",
+            mission_id=mission_id,
+        )
+        grouped: dict[int, list[Requirement]] = {}
+        for r in rows:
+            grouped.setdefault(r["slot_id"], []).append(
+                Requirement(r["skill_id"], r["name"], r["min_level"])
+            )
+        return {slot_id: tuple(reqs) for slot_id, reqs in grouped.items()}
+
+
+class MissionSlots(SlotRequirements):
     """Part of MissionRepo: reach these as `repos.missions.<method>`."""
 
     # Reading
@@ -48,22 +69,6 @@ class MissionSlots(Scoped):
             mission_id=mission_id,
         )
         return {r["id"]: r["name"] for r in rows}
-
-    def _requirements_by_slot(self, mission_id: int) -> dict[int, tuple[Requirement, ...]]:
-        rows = self._all(
-            """SELECT r.slot_id, r.skill_id, k.name, r.min_level FROM slot_requirements r
-               JOIN skills k ON k.org_id = r.org_id AND k.id = r.skill_id
-               JOIN slots s ON s.org_id = r.org_id AND s.id = r.slot_id
-               WHERE r.org_id = :org AND s.mission_id = :mission_id
-               ORDER BY r.slot_id, r.skill_id""",
-            mission_id=mission_id,
-        )
-        grouped: dict[int, list[Requirement]] = {}
-        for r in rows:
-            grouped.setdefault(r["slot_id"], []).append(
-                Requirement(r["skill_id"], r["name"], r["min_level"])
-            )
-        return {slot_id: tuple(reqs) for slot_id, reqs in grouped.items()}
 
     # Writing
 

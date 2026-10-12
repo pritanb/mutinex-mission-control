@@ -3,11 +3,11 @@ reader of a pipe goes away."""
 
 import os
 import sys
-from importlib.metadata import PackageNotFoundError, version
 from typing import Annotated
 
 import typer
 
+from mission_control.cli.base import version_flag
 from mission_control.cli.commands import account, admin, assignments, crew, me, missions
 from mission_control.cli.commands.common import group
 from mission_control.cli.env import Env
@@ -22,27 +22,11 @@ app.add_typer(admin.users_app, name="users")
 app.add_typer(admin.skills_app, name="skills")
 app.add_typer(admin.org_app, name="org")
 
-
-def _show_version(value: bool) -> None:
-    if value:
-        try:
-            number = version("mission-control")
-        except PackageNotFoundError:
-            number = "unknown"
-        typer.echo(f"mc {number}")
-        raise typer.Exit()
+Version = Annotated[bool, version_flag("mc")]
 
 
 @app.callback()
-def root(
-    ctx: typer.Context,
-    show_version: Annotated[
-        bool,
-        typer.Option(
-            "--version", help="Show the version and exit", callback=_show_version, is_eager=True
-        ),
-    ] = False,
-) -> None:
+def root(ctx: typer.Context, show_version: Version = False) -> None:
     """Mission Control: plan missions, crew them and get them approved.
 
     Start with mc login, then mc inbox. Every command has --help.

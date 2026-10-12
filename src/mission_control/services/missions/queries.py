@@ -1,15 +1,17 @@
 """Viewing missions."""
 
 from mission_control.domain.enums import Action
-from mission_control.infra.repositories.models import Mission
 from mission_control.services.context import ServiceContext, mission_context, visible_mission
-from mission_control.services.missions.views import MissionView, mission_view
+from mission_control.services.missions.views import MissionListItem, MissionView, mission_view
 
 
-def list_missions(ctx: ServiceContext) -> list[Mission]:
+def list_missions(ctx: ServiceContext) -> list[MissionListItem]:
     """Directors and Leads see every mission in their organisation; crew see the missions
-    they're on."""
-    return ctx.repos.missions.list_visible(ctx.actor)
+    they're on. Each comes with its owner's name."""
+    with ctx.read() as repos:
+        listed = repos.missions.list_visible(ctx.actor)
+        names = {u.id: u.name for u in repos.users.list()}
+    return [MissionListItem(m, names[m.owner_id]) for m in listed]
 
 
 def get_mission(ctx: ServiceContext, mission_id: int) -> MissionView:

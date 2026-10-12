@@ -165,7 +165,8 @@ Every test gets its own temporary SQLite file. `tests/cli/test_readme_smoke.py` 
 ```
 src/mission_control/
   domain/       every business rule, as pure functions: dates, eligibility, matcher, lifecycle, permissions
-  infra/        SQLite connections, schema, tenant-scoped repositories, password hashing and tokens
+  infra/        SQLite connections, schema, settings, tenant-scoped repositories, password hashing
+                and tokens, and the organisation statements mc-admin needs
   services/     one use case per function: one transaction, its checks and its audit event
   api/          FastAPI app (mc-server): validates input, resolves the caller, maps errors
   cli/          the mc command, a client of the HTTP API
@@ -183,4 +184,4 @@ The design documents were written first and then used to direct a coding agent (
 - [`CLAUDE.md`](CLAUDE.md) holds the agent's rules: one approved module at a time, tests first, a real run, a read-only review, and no commit without approval. Independent modules ran in parallel git worktrees.
 - [Design §9](docs/technical-design.md#9-delivery-plan) is the module-by-module plan, and [§10](docs/technical-design.md#10-guidelines-for-implementing-agents) the guidelines the agent followed.
 - [`docs/phase-reviews.md`](docs/phase-reviews.md) records each phase's divergences and its end-of-phase review.
-- The full, unedited AI transcripts are submitted with this repository.
+- The full, unedited AI transcripts are provided separately with the submission.

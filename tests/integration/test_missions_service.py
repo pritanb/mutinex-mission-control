@@ -1,5 +1,8 @@
 """M11: the missions service. Viewing, creating and editing missions and their slots, and
-transferring ownership (PRD M1–M3, M5, M7, §5.7, AC-4, AC-5, AC-7, AC-24, AC-27, AC-29)."""
+transferring ownership (PRD M1–M3, M5, M7, §5.7, AC-4, AC-5, AC-7, AC-24, AC-27, AC-29).
+
+AC-7 is also checked across services here: after a transfer, only the new owner can propose,
+apply the match and submit."""
 
 import json
 from datetime import UTC, date, datetime
@@ -11,7 +14,7 @@ from mission_control.domain.enums import AssignmentStatus, MissionStatus, Role
 from mission_control.domain.errors import Forbidden, InvalidInput, NotFound, RuleViolation
 from mission_control.domain.lifecycle import StateConflict
 from mission_control.domain.permissions import Actor
-from mission_control.services import missions
+from mission_control.services import approvals, assignments, matching, missions
 from mission_control.services.context import ServiceContext
 from mission_control.services.missions import SlotInput
 
@@ -32,7 +35,7 @@ PRIYA = Actor(15, 2, Role.LEAD, None)
 GATEWAY, ASTEROID, REBOOST, MEDICAL, TELESCOPE, COMMS, MARS, PAYLOAD = range(1, 9)
 # Seeded slots
 FLIGHT_ENGINEER, SPECIALIST, COMMANDER, PILOT, GEOLOGIST, REBOOST_ENGINEER = range(1, 7)
-TELESCOPE_ENGINEER, COMMS_ENGINEER = 8, 10
+FLIGHT_SURGEON, TELESCOPE_ENGINEER, COMMS_ENGINEER = 7, 8, 10
 # Aurora skills
 PILOTING, LEADERSHIP, SYS_ENG, EVA, GEOLOGY, FLIGHT_MEDICINE = range(1, 7)
 HELIX_PILOTING = 7
@@ -85,7 +88,7 @@ def engineer(name="Engineer", headcount=1, **requirements):
 
 def test_s57_directors_and_leads_list_every_mission_in_their_org(seeded_db):
     for actor in (RUTH, LEE):
-        assert [m.id for m in missions.list_missions(svc(seeded_db, actor))] == [
+        assert [m.mission.id for m in missions.list_missions(svc(seeded_db, actor))] == [
             MARS,
             TELESCOPE,
             REBOOST,
@@ -97,12 +100,26 @@ def test_s57_directors_and_leads_list_every_mission_in_their_org(seeded_db):
 
 
 def test_ac24_crew_mission_list_shows_only_missions_they_are_on(seeded_db):
-    assert [m.id for m in missions.list_missions(svc(seeded_db, BEN))] == [COMMS]
-    assert [m.id for m in missions.list_missions(svc(seeded_db, CHEN))] == [MARS, TELESCOPE]
+    assert [m.mission.id for m in missions.list_missions(svc(seeded_db, BEN))] == [COMMS]
+    assert [m.mission.id for m in missions.list_missions(svc(seeded_db, CHEN))] == [MARS, TELESCOPE]
 
 
 def test_ac28_mission_list_contains_only_the_callers_org(seeded_db):
-    assert [m.id for m in missions.list_missions(svc(seeded_db, PRIYA))] == [PAYLOAD]
+    assert [m.mission.id for m in missions.list_missions(svc(seeded_db, PRIYA))] == [PAYLOAD]
+
+
+def test_s57_mission_list_names_each_owner(seeded_db):
+    listed = missions.list_missions(svc(seeded_db, RUTH))
+    assert [(m.mission.id, m.owner_name) for m in listed] == [
+        (MARS, "Lee Park"),
+        (TELESCOPE, "Lee Park"),
+        (REBOOST, "Nora Quinn"),
+        (GATEWAY, "Lee Park"),
+        (ASTEROID, "Nora Quinn"),
+        (MEDICAL, "Nora Quinn"),
+        (COMMS, "Nora Quinn"),
+    ]
+    assert [m.owner_name for m in missions.list_missions(svc(seeded_db, PRIYA))] == ["Priya Nair"]
 
 
 def test_s57_view_has_slots_requirements_assignments_and_the_current_rounds_approvals(seeded_db):
@@ -491,6 +508,25 @@ def test_m2_every_repeated_slot_name_is_listed_at_once(seeded_db):
         "More than one slot is called Engineer",
         "More than one slot is called Pilot",
     ]
+
+
+def test_m1_m2_every_reason_a_new_mission_is_refused_is_listed_at_once(seeded_db):
+    before = snapshot(seeded_db)
+    with pytest.raises(RuleViolation) as err:
+        missions.create_mission(
+            svc(seeded_db, RUTH),
+            name="Lunar Relay",
+            start=d("2027-07-01"),
+            end=d("2027-07-04"),
+            slots=[engineer("A"), engineer("a")],
+            owner_id=7,  # Ben, a Crew Member
+        )
+    assert (err.value.code, err.value.message) == ("rule_violation", "Lunar Relay can't be created")
+    assert [(p.code, p.message) for p in err.value.problems] == [
+        ("already_exists", "More than one slot is called A"),
+        ("owner_not_active_lead", "Ben Ito can't own a mission: only Mission Leads can"),
+    ]
+    assert snapshot(seeded_db) == before
 
 
 # --- Edit name and dates (M3, M5, M7, AC-4, AC-5) -----------------------------------------
@@ -923,14 +959,18 @@ def test_m2_m3_the_owner_replaces_a_slots_requirements(seeded_db):
     [(_, event, _, _, data)] = last_events(seeded_db, GATEWAY, 1)
     assert event == "slot.requirements_changed"
     assert data["slot_name"] == "Commander"
-    assert data["requirements"] == [
-        {"skill_id": PILOTING, "skill_name": "Piloting", "min_level": 5},
-        {"skill_id": LEADERSHIP, "skill_name": "Leadership", "min_level": 4},
-    ]
-    assert data["previous_requirements"] == [
-        {"skill_id": PILOTING, "skill_name": "Piloting", "min_level": 4},
-        {"skill_id": LEADERSHIP, "skill_name": "Leadership", "min_level": 3},
-    ]
+    assert data["changes"] == {
+        "requirements": [
+            [
+                {"skill_id": PILOTING, "skill_name": "Piloting", "min_level": 4},
+                {"skill_id": LEADERSHIP, "skill_name": "Leadership", "min_level": 3},
+            ],
+            [
+                {"skill_id": PILOTING, "skill_name": "Piloting", "min_level": 5},
+                {"skill_id": LEADERSHIP, "skill_name": "Leadership", "min_level": 4},
+            ],
+        ]
+    }
 
 
 def test_m7_a_requirement_change_that_breaks_an_assignee_is_refused(seeded_db):
@@ -1095,6 +1135,26 @@ def test_m2_a_missions_last_slot_cannot_be_removed(seeded_db):
     assert snapshot(seeded_db) == before
 
 
+def test_m2_removing_an_occupied_only_slot_lists_both_reasons(seeded_db):
+    # Marco is accepted in Lunar Surface Medical Study's only slot, Flight Surgeon.
+    before = snapshot(seeded_db)
+    with pytest.raises(RuleViolation) as err:
+        missions.remove_slot(svc(seeded_db, NORA), MEDICAL, FLIGHT_SURGEON)
+    assert (err.value.code, err.value.message) == (
+        "rule_violation",
+        "Can't remove Flight Surgeon from Lunar Surface Medical Study: it's the mission's only "
+        "slot, and Marco is assigned to it",
+    )
+    assert [(p.code, p.message) for p in err.value.problems] == [
+        (
+            "mission_needs_a_slot",
+            "Can't remove Flight Surgeon: Lunar Surface Medical Study needs at least one slot",
+        ),
+        ("slot_has_open_assignments", "Flight Surgeon: Marco is still assigned"),
+    ]
+    assert snapshot(seeded_db) == before
+
+
 def test_ac29_another_orgs_slot_cannot_be_removed(seeded_db):
     before = snapshot(seeded_db)
     with pytest.raises(NotFound) as err:
@@ -1195,10 +1255,10 @@ def test_ac7_after_transfer_the_new_owner_can_edit_and_the_old_cannot(seeded_db)
     assert (actor, event) == (RUTH.user_id, "mission.transferred")
     assert data == {
         "mission_name": "Lunar Gateway Resupply",
-        "from_owner_id": LEE.user_id,
-        "from_owner_name": "Lee Park",
-        "to_owner_id": NORA.user_id,
-        "to_owner_name": "Nora Quinn",
+        "changes": {
+            "owner_id": [LEE.user_id, NORA.user_id],
+            "owner_name": ["Lee Park", "Nora Quinn"],
+        },
     }
 
     missions.update_mission(svc(seeded_db, NORA), GATEWAY, name="Gateway (Nora)")
@@ -1207,6 +1267,45 @@ def test_ac7_after_transfer_the_new_owner_can_edit_and_the_old_cannot(seeded_db)
     assert err.value.code == "not_owner"
     with pytest.raises(Forbidden):
         missions.add_slot(svc(seeded_db, LEE), GATEWAY, engineer())
+
+
+def test_ac7_after_transfer_only_the_new_owner_can_propose_apply_the_match_and_submit(seeded_db):
+    missions.transfer_ownership(svc(seeded_db, RUTH), GATEWAY, NORA.user_id)
+
+    def state():
+        rows = seeded_db.execute("SELECT * FROM assignments ORDER BY id").fetchall()
+        return snapshot(seeded_db), [tuple(r) for r in rows]
+
+    def refused_to_lee(call, doing):
+        before = state()
+        with pytest.raises(Forbidden) as err:
+            call(svc(seeded_db, LEE))
+        assert (err.value.code, err.value.message) == (
+            "not_owner",
+            f"Only the mission's owner can {doing} this mission",
+        )
+        assert state() == before
+
+    # Propose: the previous owner can't; the new owner can.
+    refused_to_lee(
+        lambda c: assignments.propose(c, GATEWAY, FLIGHT_ENGINEER, BEN.crew_profile_id),
+        "propose crew for",
+    )
+    ben = assignments.propose(svc(seeded_db, NORA), GATEWAY, FLIGHT_ENGINEER, BEN.crew_profile_id)
+    assert ben.status == AssignmentStatus.PROPOSED
+
+    # Apply the match: the same.
+    refused_to_lee(lambda c: matching.apply(c, GATEWAY), "apply suggested crew to")
+    made = matching.apply(svc(seeded_db, NORA), GATEWAY)
+    assert [(a.slot_id, a.crew_profile_id) for a in made] == [(COMMANDER, 6), (SPECIALIST, 9)]
+
+    # Submit, once every proposal is accepted: the same.
+    crew_actors = {7: BEN, 6: ANA, 9: Actor(9, 1, Role.CREW, 9)}
+    for a in (ben, *made):
+        assignments.accept(svc(seeded_db, crew_actors[a.crew_profile_id]), a.id)
+    refused_to_lee(lambda c: approvals.submit(c, GATEWAY), "submit")
+    view = approvals.submit(svc(seeded_db, NORA), GATEWAY)
+    assert view.mission.status == MissionStatus.PENDING_APPROVAL
 
 
 def test_m1_transferring_a_pending_mission_returns_it_to_draft_and_clears_approvals(seeded_db):

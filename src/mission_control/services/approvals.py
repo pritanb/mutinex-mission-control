@@ -12,19 +12,18 @@ one. An approval already given still counts if its Director is later deactivated
 
 from mission_control.domain.approvals import (
     Approver,
-    approver_problems,
     count_eligible_approvers,
+    decision_problems,
     reaches_quorum,
 )
 from mission_control.domain.enums import Action, MissionStatus, Role
-from mission_control.domain.errors import InvalidInput
 from mission_control.domain.events import Event
 from mission_control.domain.lifecycle import (
     StateConflict,
     check_submit,
     mission_status_after,
+    require_state,
     roster_problems,
-    state_problem,
 )
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import Mission
@@ -34,6 +33,7 @@ from mission_control.services.context import (
     mission_context,
     visible_mission,
 )
+from mission_control.services.inputs import required_reason
 from mission_control.services.missions.loading import reload
 from mission_control.services.missions.views import MissionView, mission_view
 
@@ -49,7 +49,7 @@ def submit(ctx: ServiceContext, mission_id: int) -> MissionView:
         mission = visible_mission(ctx, repos, mission_id)
         about = mission_context(repos, mission)
         ctx.authorize(Action.SUBMIT, about)
-        _check_state(mission, Action.SUBMIT)
+        require_state(mission.status, Action.SUBMIT)
 
         required = repos.organisation.get().required_approvals
         approvers = [
@@ -134,9 +134,7 @@ def reject(ctx: ServiceContext, mission_id: int, reason: str | None) -> MissionV
     Draft; its accepted crew stay accepted."""
     with ctx.write() as repos:
         mission = _open_round(ctx, repos, mission_id, Action.REJECT)
-        given = (reason or "").strip()
-        if not given:
-            raise InvalidInput(f"Rejecting {mission.name} needs a reason")
+        given = required_reason(reason, f"Rejecting {mission.name}")
 
         repos.approvals.record(
             mission.id, mission.approval_round, ctx.actor.user_id, _REJECT, given
@@ -161,18 +159,14 @@ def _open_round(ctx: ServiceContext, repos: Repos, mission_id: int, action: Acti
     mission = visible_mission(ctx, repos, mission_id)
     about = mission_context(repos, mission)
     ctx.authorize(action, about)
-    _check_state(mission, action)
+    require_state(mission.status, action)
     decided = {a.director_id for a in repos.approvals.for_round(mission.id, mission.approval_round)}
-    me = Approver(ctx.actor.user_id, is_director=True, active=True)
-    # Role, creator and roster were settled by authorize, so only "already decided" is left.
-    if problems := approver_problems(me, mission.created_by_id, about.rostered_user_ids, decided):
+    # Creator and roster were settled by authorize, so only "already decided" can be left.
+    if problems := decision_problems(
+        ctx.actor.user_id, mission.created_by_id, about.rostered_user_ids, decided
+    ):
         raise StateConflict(problems[0])
     return mission
-
-
-def _check_state(mission: Mission, action: Action) -> None:
-    if problem := state_problem(mission.status, action):
-        raise StateConflict(problem)
 
 
 def _view(repos: Repos, mission: Mission) -> MissionView:

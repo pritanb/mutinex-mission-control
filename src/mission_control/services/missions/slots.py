@@ -4,13 +4,14 @@ required skills, and removing it. Only the mission's owner can."""
 from collections.abc import Mapping
 
 from mission_control.domain.eligibility import SlotEdit, SlotRemoval
-from mission_control.domain.errors import Problem, RuleViolation
+from mission_control.domain.errors import Problem
 from mission_control.domain.events import Event
-from mission_control.services.context import ServiceContext
+from mission_control.domain.wording import is_are, join_names
+from mission_control.services.context import ServiceContext, check
+from mission_control.services.inputs import refuse_input
 from mission_control.services.missions.inputs import (
     SlotInput,
     levels,
-    refuse_input,
     requirement_data,
     slot_label,
     slot_problems,
@@ -22,8 +23,7 @@ from mission_control.services.missions.loading import (
     resolve_skills,
 )
 from mission_control.services.missions.rules import (
-    is_are,
-    join_names,
+    invalidated,
     record_change,
     refuse_if_invalidated,
     refuse_taken_name,
@@ -51,8 +51,8 @@ def add_slot(ctx: ServiceContext, mission_id: int, slot: SlotInput) -> MissionVi
             mission,
             target.status,
             Event.SLOT_ADDED,
+            mission.name,
             {
-                "mission_name": mission.name,
                 "slot_id": added.id,
                 "slot_name": added.name,
                 "headcount": added.headcount,
@@ -105,8 +105,8 @@ def update_slot(
             mission,
             target.status,
             Event.SLOT_UPDATED,
+            mission.name,
             {
-                "mission_name": mission.name,
                 "slot_id": slot.id,
                 "slot_name": new_name,
                 "changes": changes,
@@ -147,12 +147,13 @@ def replace_requirements(
             mission,
             target.status,
             Event.SLOT_REQUIREMENTS_CHANGED,
+            mission.name,
             {
-                "mission_name": mission.name,
                 "slot_id": slot.id,
                 "slot_name": slot.name,
-                "requirements": requirement_data(new),
-                "previous_requirements": requirement_data(slot.requirements),
+                "changes": {
+                    "requirements": [requirement_data(slot.requirements), requirement_data(new)]
+                },
             },
         )
         return mission_view(repos, reload(repos, mission))
@@ -164,23 +165,30 @@ def remove_slot(ctx: ServiceContext, mission_id: int, slot_id: int) -> MissionVi
     with ctx.write() as repos:
         target = open_slot_for_edit(ctx, repos, mission_id, slot_id)
         mission, slot = target.mission, target.slot
+        assigned, names = invalidated(repos, mission, SlotRemoval(slot.id))
+        problems: list[Problem] = []
         if len(repos.missions.slots(mission.id)) == 1:
-            raise RuleViolation.of(
+            problems.append(
                 Problem(
                     "mission_needs_a_slot",
                     f"Can't remove {slot.name}: {mission.name} needs at least one slot",
                     {"slot_id": slot.id},
                 )
             )
-        refuse_if_invalidated(
-            repos,
-            mission,
-            SlotRemoval(slot.id),
-            lambda names: (
+        problems += assigned
+        if not assigned:
+            message = problems[0].message if problems else ""
+        elif len(problems) > len(assigned):  # the only slot, and occupied
+            message = (
+                f"Can't remove {slot.name} from {mission.name}: it's the mission's only slot, "
+                f"and {join_names(names)} {is_are(names)} assigned to it"
+            )
+        else:
+            message = (
                 f"Can't remove {slot.name} from {mission.name} while {join_names(names)} "
                 f"{is_are(names)} assigned to it. Remove them from the mission first."
-            ),
-        )
+            )
+        check(problems, message)
 
         repos.missions.remove_slot(slot.id)
         record_change(
@@ -189,6 +197,7 @@ def remove_slot(ctx: ServiceContext, mission_id: int, slot_id: int) -> MissionVi
             mission,
             target.status,
             Event.SLOT_REMOVED,
-            {"mission_name": mission.name, "slot_id": slot.id, "slot_name": slot.name},
+            mission.name,
+            {"slot_id": slot.id, "slot_name": slot.name},
         )
         return mission_view(repos, reload(repos, mission))

@@ -42,18 +42,20 @@ def connect(path: str | Path, *, busy_timeout_ms: int = 5000) -> sqlite3.Connect
     return conn
 
 
-def init_db(conn: sqlite3.Connection) -> None:
-    """Create the schema on an empty database; do nothing if it's already current."""
+def init_db(conn: sqlite3.Connection) -> bool:
+    """Create the schema on an empty database; do nothing if it's already current. True if it
+    was created just now."""
     check_sqlite_version()
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == SCHEMA_VERSION:
-        return
+        return False
     if version != 0:
         raise RuntimeError(
             f"database schema version {version} is not supported (expected {SCHEMA_VERSION})"
         )
     conn.executescript(f"BEGIN;\n{SCHEMA_SQL}\nCOMMIT;")
     conn.execute("PRAGMA journal_mode = WAL")
+    return True
 
 
 def utc_timestamp(moment: datetime) -> str:

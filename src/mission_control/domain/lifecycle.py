@@ -104,6 +104,12 @@ def state_problem(status: MissionStatus, action: Action) -> Problem | None:
     return _wrong_state(status, _MISSION_VERB[action])
 
 
+def require_state(status: MissionStatus, action: Action) -> None:
+    """Raise `StateConflict` unless mission `action` is allowed from `status`."""
+    if problem := state_problem(status, action):
+        raise StateConflict(problem)
+
+
 def mission_status_after(
     status: MissionStatus, action: Action, *, reaches_quorum: bool = False
 ) -> MissionStatus:
@@ -283,8 +289,14 @@ def check_submit(
         problems.append(
             Problem(
                 "insufficient_approvers",
-                f"{eligible_approvers} eligible approver{'s' if eligible_approvers != 1 else ''}, "
-                f"{approvals_required} required",
+                f"{_who_can_approve(eligible_approvers)} approve this mission; "
+                f"it needs {approvals_required}",
             )
         )
     return problems
+
+
+def _who_can_approve(count: int) -> str:
+    if count == 0:
+        return "No Director can"
+    return f"Only {count} Director{'s' if count != 1 else ''} can"

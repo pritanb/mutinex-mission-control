@@ -1,3 +1,5 @@
+from collections.abc import Generator
+
 import pytest
 from cli_fakes import FakeApi, Mc
 
@@ -10,8 +12,11 @@ def _no_ambient_terminal_settings(monkeypatch):
 
 
 @pytest.fixture
-def api() -> FakeApi:
-    return FakeApi()
+def api() -> Generator[FakeApi]:
+    """The scripted API. Fails the test if it sent a response the real API couldn't."""
+    fake = FakeApi()
+    yield fake
+    assert not fake.drift, "Fake responses don't match the real API:\n" + "\n".join(fake.drift)
 
 
 @pytest.fixture

@@ -377,10 +377,20 @@ def test_missions_list_shows_visible_missions(client, login):
         "end_date",
         "status",
         "owner_id",
+        "owner_name",
         "created_by_id",
         "approval_round",
         "approvals_required",
     }
+    assert [m["owner_name"] for m in missions] == [
+        "Lee Park",
+        "Lee Park",
+        "Nora Quinn",
+        "Lee Park",
+        "Nora Quinn",
+        "Nora Quinn",
+        "Nora Quinn",
+    ]
 
 
 def test_mission_show_includes_roster_and_current_approvals(client, login):
@@ -483,11 +493,15 @@ def test_slot_patch_refuses_requirements_with_name_or_headcount(client, login, s
 
 
 def test_m2_removing_the_only_slot_is_409(client, login):
+    # Station Reboost's only slot, which Gus holds: both reasons are listed.
     response = client.delete(f"{API}/missions/3/slots/6", headers=login("nora"))
     assert response.status_code == 409
     error = response.json()["error"]
     assert error["code"] == "rule_violation"
-    assert [p["code"] for p in error["problems"]] == ["mission_needs_a_slot"]
+    assert [p["code"] for p in error["problems"]] == [
+        "mission_needs_a_slot",
+        "slot_has_open_assignments",
+    ]
 
 
 def test_m7_removing_a_slot_with_open_assignments_names_the_crew(client, login):

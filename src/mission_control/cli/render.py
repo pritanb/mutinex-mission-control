@@ -23,6 +23,15 @@ MISSION_STATUS = {
     "completed": "Completed",
     "cancelled": "Cancelled",
 }
+ASSIGNMENT_STATUS = {
+    "proposed": "Proposed",
+    "accepted": "Accepted",
+    "declined": "Declined",
+    "withdrawn": "Withdrawn",
+    "removed": "Removed",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+}
 ROLE = {"director": "Director", "lead": "Mission Lead", "crew": "Crew Member"}
 
 

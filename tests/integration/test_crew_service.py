@@ -12,9 +12,8 @@ from datetime import UTC, date, datetime
 import pytest
 
 from builders import make_assignment, make_crew_profile, make_user
-from mission_control.domain.dates import InvalidDateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus, Role
-from mission_control.domain.errors import Forbidden, NotFound, RuleViolation
+from mission_control.domain.errors import Forbidden, InvalidInput, NotFound, RuleViolation
 from mission_control.domain.permissions import Actor
 from mission_control.services import crew
 from mission_control.services.context import ServiceContext
@@ -200,14 +199,25 @@ def test_ac23_ben_edits_his_personal_details(seeded_db):
     assert crew.view_crew(as_(seeded_db, LEE), 7).name == "Benji"
     actor, event, profile, _, data = last_audit(seeded_db)
     assert (actor, event, profile) == (7, "crew.details_updated", 7)
-    assert data == {"crew_name": "Benji", "previous_name": "Ben"}
+    assert data == {
+        "crew_name": "Benji",
+        "changes": {"display_name": ["Ben", "Benji"], "bio": [None, "EVA nerd"]},
+    }
 
 
 def test_p4_display_name_is_kept_when_only_the_bio_changes_and_bio_can_be_cleared(seeded_db):
     ctx = as_(seeded_db, ANA)  # a Lead with a crew profile
     assert crew.update_details(ctx, 6, bio="Test pilot").display_name == "Ana"
+    assert last_audit(seeded_db)[4] == {
+        "crew_name": "Ana",
+        "changes": {"bio": [None, "Test pilot"]},
+    }
     cleared = crew.update_details(ctx, 6, bio="")
     assert (cleared.display_name, cleared.bio) == ("Ana", None)
+    assert last_audit(seeded_db)[4] == {
+        "crew_name": "Ana",
+        "changes": {"bio": ["Test pilot", None]},
+    }
 
 
 def test_p4_display_name_cant_be_blank(seeded_db):
@@ -239,6 +249,19 @@ def test_ac29_editing_another_organisations_profile_is_not_found(seeded_db):
     with pytest.raises(NotFound):
         crew.update_details(as_(seeded_db, KAI), 11, display_name="Hijack")
     assert unchanged(seeded_db, before)
+
+
+def test_ac29_another_orgs_profile_is_not_found_before_its_values_are_checked(seeded_db):
+    before = snapshot(seeded_db)
+    with pytest.raises(NotFound):
+        crew.update_details(as_(seeded_db, SAM), 11, display_name="   ")
+    assert unchanged(seeded_db, before)
+
+
+def test_p4_permission_is_checked_before_the_display_name(seeded_db):
+    with pytest.raises(Forbidden) as err:
+        crew.update_details(as_(seeded_db, LEE), 11, display_name="   ")
+    assert err.value.code == "not_owner"
 
 
 def test_p4_self_check_uses_the_profiles_user_not_the_profile_id(seeded_db):
@@ -282,8 +305,21 @@ def test_m2_unavailability_may_be_in_the_past(seeded_db):
 
 def test_m2_unavailability_end_before_start_is_invalid(seeded_db):
     before = snapshot(seeded_db)
-    with pytest.raises(InvalidDateRange):
+    with pytest.raises(InvalidInput) as err:
         crew.add_unavailability(as_(seeded_db, BEN), 7, date(2027, 6, 3), date(2027, 6, 1), "X")
+    assert err.value.message == "The end date 2027-06-01 is before the start date 2027-06-03"
+    assert unchanged(seeded_db, before)
+
+
+def test_p5_every_unavailability_mistake_is_listed_together(seeded_db):
+    before = snapshot(seeded_db)
+    with pytest.raises(InvalidInput) as err:
+        crew.add_unavailability(as_(seeded_db, BEN), 7, date(2027, 6, 3), date(2027, 6, 1), " ")
+    assert (err.value.code, err.value.message) == ("validation_error", "Some values aren't valid")
+    assert [(p.code, p.message) for p in err.value.problems] == [
+        ("validation_error", "The end date 2027-06-01 is before the start date 2027-06-03"),
+        ("validation_error", "Unavailability needs a reason"),
+    ]
     assert unchanged(seeded_db, before)
 
 
@@ -319,7 +355,7 @@ def test_ac16_hana_cant_be_unavailable_during_the_active_telescope_mission(seede
         crew.add_unavailability(
             as_(seeded_db, HANA), 13, date(2027, 1, 1), date(2027, 1, 10), "Leave"
         )
-    assert err.value.message == "Hana has accepted assignments overlapping those dates"
+    assert err.value.message == "Hana has an accepted assignment overlapping those dates"
     assert "Orbital Telescope Service" in err.value.problems[0].message
 
 
@@ -355,6 +391,19 @@ def test_p4_nobody_else_records_unavailability(seeded_db, actor):
         crew.add_unavailability(
             as_(seeded_db, actor), 11, date(2027, 6, 1), date(2027, 6, 2), "Booked"
         )
+    assert err.value.code == "not_owner"
+    assert unchanged(seeded_db, before)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "reason"),
+    [(date(2027, 6, 1), date(2027, 6, 2), " "), (date(2027, 6, 2), date(2027, 6, 1), "Booked")],
+    ids=["blank reason", "end before start"],
+)
+def test_p4_permission_is_checked_before_the_unavailability_values(seeded_db, start, end, reason):
+    before = snapshot(seeded_db)
+    with pytest.raises(Forbidden) as err:
+        crew.add_unavailability(as_(seeded_db, LEE), 11, start, end, reason)
     assert err.value.code == "not_owner"
     assert unchanged(seeded_db, before)
 
@@ -424,7 +473,7 @@ def test_ac23_lee_can_change_anas_skill_levels(seeded_db):
     assert tuple(stored) == (3, 4)
     actor, event, profile, _, data = last_audit(seeded_db)
     assert (actor, event, profile) == (4, "crew.skill_set", 6)
-    assert data == {"crew_name": "Ana", "skill_name": "Piloting", "level": 3, "previous_level": 5}
+    assert data == {"crew_name": "Ana", "skill_name": "Piloting", "changes": {"level": [5, 3]}}
 
 
 def test_ac23_ben_cant_edit_skills(seeded_db):
@@ -440,10 +489,23 @@ def test_ac23_ben_cant_edit_skills(seeded_db):
     assert unchanged(seeded_db, before)
 
 
+def test_ac23_crew_setting_an_out_of_range_level_is_forbidden_not_invalid(seeded_db):
+    before = snapshot(seeded_db)
+    with pytest.raises(Forbidden) as err:
+        crew.set_skill_level(as_(seeded_db, BEN), 7, EVA, 9)
+    assert err.value.code == "role_forbidden"
+    assert unchanged(seeded_db, before)
+
+
+def test_ac29_another_orgs_skill_level_is_not_found_before_the_level_is_checked(seeded_db):
+    with pytest.raises(NotFound):
+        crew.set_skill_level(as_(seeded_db, SAM), 7, EVA, 9)
+
+
 def test_p3_director_adds_a_new_skill_level(seeded_db):
     crew.set_skill_level(as_(seeded_db, RUTH), 11, EVA, 2)
     assert crew.view_crew(as_(seeded_db, RUTH), 11).skills[0].skill_name == "EVA"
-    assert last_audit(seeded_db)[4]["previous_level"] is None
+    assert last_audit(seeded_db)[4]["changes"] == {"level": [None, 2]}
 
 
 def test_p3_lead_removes_a_skill_level(seeded_db):
@@ -451,7 +513,7 @@ def test_p3_lead_removes_a_skill_level(seeded_db):
     assert [s.skill_id for s in crew.view_crew(as_(seeded_db, LEE), 7).skills] == [SYS_ENG]
     actor, event, profile, _, data = last_audit(seeded_db)
     assert (actor, event, profile) == (4, "crew.skill_removed", 7)
-    assert data == {"crew_name": "Ben", "skill_name": "EVA", "previous_level": 3}
+    assert data == {"crew_name": "Ben", "skill_name": "EVA", "changes": {"level": [3, None]}}
 
 
 @pytest.mark.parametrize("level", [0, 6])
