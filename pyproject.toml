@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 mc = "mission_control.cli.main:main"
+mc-admin = "mission_control.admin_cli:main"
 mc-server = "mission_control.api.app:main"
 
 [dependency-groups]
