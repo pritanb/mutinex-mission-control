@@ -33,6 +33,7 @@ MISSION_ACTIONS = [
     Action.COMPLETE,
     Action.CANCEL,
     Action.EDIT_MISSION,
+    Action.PREVIEW_MATCH,
 ]
 ASSIGNMENT_ACTIONS = [
     Action.PROPOSE_CREW,
@@ -50,6 +51,7 @@ ALLOWED = {
     Action.COMPLETE: {M.ACTIVE},
     Action.CANCEL: {M.DRAFT, M.PENDING_APPROVAL, M.ACTIVE},
     Action.EDIT_MISSION: {M.DRAFT, M.PENDING_APPROVAL},
+    Action.PREVIEW_MATCH: {M.DRAFT},  # the matcher suggests crew for draft missions only
 }
 
 
@@ -71,7 +73,7 @@ def test_finished_missions_refuse_everything_with_mission_final(action, status):
 
 @pytest.mark.parametrize(
     "action",
-    [Action.EDIT_MISSION, Action.SUBMIT, Action.APPROVE, Action.REJECT],
+    [Action.EDIT_MISSION, Action.SUBMIT, Action.APPROVE, Action.REJECT, Action.PREVIEW_MATCH],
 )
 def test_ac5_active_mission_refuses_changes_with_mission_frozen(action):
     assert state_problem(M.ACTIVE, action).code == "mission_frozen"
@@ -90,6 +92,7 @@ def test_ac5_active_mission_still_allows_complete_cancel_and_transfer(action):
         (M.DRAFT, Action.COMPLETE),
         (M.PENDING_APPROVAL, Action.SUBMIT),
         (M.PENDING_APPROVAL, Action.COMPLETE),
+        (M.PENDING_APPROVAL, Action.PREVIEW_MATCH),
     ],
 )
 def test_wrong_state_in_draft_or_pending_is_invalid_transition(status, action):
@@ -155,6 +158,10 @@ def test_touch_for_change_refuses_a_finished_mission_as_final(status, message):
         touch_for_change(status)
     assert raised.value.problem.code == "mission_final"
     assert raised.value.problem.message == message
+
+
+def test_previewing_a_match_leaves_a_draft_mission_in_draft():
+    assert mission_status_after(M.DRAFT, Action.PREVIEW_MATCH) == M.DRAFT
 
 
 def test_complete_and_cancel_reach_final_states():
@@ -311,6 +318,13 @@ def test_ac12_too_few_eligible_approvers_blocks_submission():
         (M.PENDING_APPROVAL, Action.SUBMIT, "Can't submit a mission pending approval"),
         (M.ACTIVE, Action.EDIT_MISSION, "Can't edit an active mission"),
         (M.COMPLETED, Action.CANCEL, "Can't cancel a mission that's completed"),
+        (M.ACTIVE, Action.PREVIEW_MATCH, "Can't suggest crew for an active mission"),
+        (
+            M.PENDING_APPROVAL,
+            Action.PREVIEW_MATCH,
+            "Can't suggest crew for a mission pending approval",
+        ),
+        (M.CANCELLED, Action.PREVIEW_MATCH, "Can't suggest crew for a mission that's cancelled"),
     ],
 )
 def test_mission_refusal_wording(status, action, message):

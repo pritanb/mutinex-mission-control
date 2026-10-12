@@ -15,6 +15,7 @@ from mission_control.domain.events import Event
 from mission_control.domain.permissions import NO_CONTEXT, Action, Actor, Context, authorize
 from mission_control.infra.db import read_tx, write_tx
 from mission_control.infra.repositories import Repos
+from mission_control.infra.repositories.models import Mission
 
 
 class ServiceContext:
@@ -64,6 +65,20 @@ def found[T](value: T | None, what: str) -> T:
     if value is None:
         raise NotFound(what)
     return value
+
+
+def visible_mission(ctx: ServiceContext, repos: Repos, mission_id: int) -> Mission:
+    """The mission if the actor may see it; NotFound if it's missing or hidden from them."""
+    return found(repos.missions.get_visible(ctx.actor, mission_id), "Mission")
+
+
+def mission_context(repos: Repos, mission: Mission) -> Context:
+    """Everything the permission rules may ask about a mission."""
+    return Context(
+        owner_id=mission.owner_id,
+        created_by_id=mission.created_by_id,
+        rostered_user_ids=repos.missions.rostered_user_ids(mission.id),
+    )
 
 
 def check(problems: Sequence[Problem], message: str) -> None:

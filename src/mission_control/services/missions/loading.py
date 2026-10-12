@@ -5,11 +5,15 @@ from dataclasses import dataclass
 
 from mission_control.domain.enums import Action, MissionStatus
 from mission_control.domain.lifecycle import touch_for_change
-from mission_control.domain.permissions import Context
 from mission_control.domain.records import Requirement
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import Mission, Slot
-from mission_control.services.context import ServiceContext, found
+from mission_control.services.context import (
+    ServiceContext,
+    found,
+    mission_context,
+    visible_mission,
+)
 
 
 @dataclass(frozen=True)
@@ -29,7 +33,7 @@ class SlotEditTarget(EditTarget):
 def open_for_edit(ctx: ServiceContext, repos: Repos, mission_id: int) -> EditTarget:
     """The opening steps of every mission edit: find the mission, check the actor may edit it,
     then check its state."""
-    mission = visible(ctx, repos, mission_id)
+    mission = visible_mission(ctx, repos, mission_id)
     ctx.authorize(Action.EDIT_MISSION, mission_context(repos, mission))
     return EditTarget(mission, touch_for_change(mission.status))
 
@@ -39,27 +43,14 @@ def open_slot_for_edit(
 ) -> SlotEditTarget:
     """The same, for an edit to one of the mission's slots. The slot is found before the
     permission check, like the mission: anyone who can see a mission can see its slots."""
-    mission = visible(ctx, repos, mission_id)
+    mission = visible_mission(ctx, repos, mission_id)
     slot = slot_of(repos, mission, slot_id)
     ctx.authorize(Action.EDIT_MISSION, mission_context(repos, mission))
     return SlotEditTarget(mission, touch_for_change(mission.status), slot)
 
 
-def visible(ctx: ServiceContext, repos: Repos, mission_id: int) -> Mission:
-    return found(repos.missions.get_visible(ctx.actor, mission_id), "Mission")
-
-
 def reload(repos: Repos, mission: Mission) -> Mission:
     return found(repos.missions.get(mission.id), "Mission")
-
-
-def mission_context(repos: Repos, mission: Mission) -> Context:
-    """Everything the permission rules may ask about a mission."""
-    return Context(
-        owner_id=mission.owner_id,
-        created_by_id=mission.created_by_id,
-        rostered_user_ids=repos.missions.rostered_user_ids(mission.id),
-    )
 
 
 def slot_of(repos: Repos, mission: Mission, slot_id: int) -> Slot:

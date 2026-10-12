@@ -156,7 +156,7 @@ _MISSION_PHRASE: Mapping[Action, str] = MappingProxyType(
         Action.REMOVE_CREW: "remove crew from this mission",
         Action.APPLY_MATCH: "apply matcher suggestions to this mission",
         Action.SUBMIT: "submit this mission",
-        Action.PREVIEW_MATCH: "preview matching for this mission",
+        Action.PREVIEW_MATCH: "see suggested crew for this mission",
         Action.COMPLETE: "complete this mission",
         Action.CANCEL: "cancel this mission",
     }

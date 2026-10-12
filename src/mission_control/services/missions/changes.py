@@ -10,7 +10,12 @@ from mission_control.domain.errors import Problem, RuleViolation
 from mission_control.domain.events import Event
 from mission_control.domain.lifecycle import StateConflict, mission_status_after, state_problem
 from mission_control.domain.permissions import Context
-from mission_control.services.context import ServiceContext, found
+from mission_control.services.context import (
+    ServiceContext,
+    found,
+    mission_context,
+    visible_mission,
+)
 from mission_control.services.missions.inputs import (
     SlotInput,
     date_problems,
@@ -23,13 +28,7 @@ from mission_control.services.missions.inputs import (
     slot_label,
     slot_problems,
 )
-from mission_control.services.missions.loading import (
-    mission_context,
-    open_for_edit,
-    reload,
-    resolve_skills,
-    visible,
-)
+from mission_control.services.missions.loading import open_for_edit, reload, resolve_skills
 from mission_control.services.missions.rules import (
     join_names,
     record_change,
@@ -166,7 +165,7 @@ def transfer_ownership(ctx: ServiceContext, mission_id: int, new_owner_id: int) 
     """Directors hand a mission that isn't finished to another active Lead. A Pending mission
     goes back to Draft; an Active one stays Active, since its roster doesn't change."""
     with ctx.write() as repos:
-        mission = visible(ctx, repos, mission_id)
+        mission = visible_mission(ctx, repos, mission_id)
         ctx.authorize(Action.TRANSFER, mission_context(repos, mission))
         problem = state_problem(mission.status, Action.TRANSFER)
         if problem is not None:

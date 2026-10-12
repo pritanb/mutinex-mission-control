@@ -2,8 +2,7 @@
 
 from mission_control.domain.enums import Action
 from mission_control.infra.repositories.models import Mission
-from mission_control.services.context import ServiceContext
-from mission_control.services.missions.loading import mission_context, visible
+from mission_control.services.context import ServiceContext, mission_context, visible_mission
 from mission_control.services.missions.views import MissionView, mission_view
 
 
@@ -16,6 +15,6 @@ def list_missions(ctx: ServiceContext) -> list[Mission]:
 def get_mission(ctx: ServiceContext, mission_id: int) -> MissionView:
     """A mission the actor can't see is reported as not found, exactly like a missing one."""
     with ctx.read() as repos:
-        mission = visible(ctx, repos, mission_id)
+        mission = visible_mission(ctx, repos, mission_id)
         ctx.authorize_view(Action.VIEW_MISSION, mission_context(repos, mission), "Mission")
         return mission_view(repos, mission)

@@ -154,7 +154,7 @@ MESSAGES = [
         L,
         Action.PREVIEW_MATCH,
         LEAD_OWNS_OTHER,
-        "Only the owner or a Director can preview matching for this mission",
+        "Only the owner or a Director can see suggested crew for this mission",
     ),
     (L, Action.CREATE_MISSION, FOR_OTHER, "Leads can only create missions they own"),
     (C, Action.VIEW_CREW, NOT_SELF, "Crew can only view their own profile"),
