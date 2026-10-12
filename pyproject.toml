@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+mc = "mission_control.cli.main:main"
 mc-server = "mission_control.api.app:main"
 
 [dependency-groups]
