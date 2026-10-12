@@ -39,3 +39,11 @@ def test_state_conflict_is_a_rule_violation_that_keeps_its_problem():
 def test_not_found_has_one_code_and_a_message_naming_the_thing():
     err = NotFound("Mission")
     assert (err.code, err.message) == ("not_found", "Mission not found")
+
+
+def test_invalid_input_is_a_value_error_with_the_validation_code():
+    from mission_control.domain.errors import InvalidInput
+
+    err = InvalidInput("Skill level must be between 1 and 5")
+    assert isinstance(err, ValueError)
+    assert (err.code, err.message) == ("validation_error", "Skill level must be between 1 and 5")

@@ -60,3 +60,14 @@ class RuleViolation(Exception):
     def of(cls, problem: Problem) -> "RuleViolation":
         """A refusal with a single reason takes that reason's code and message."""
         return cls(problem.message, [problem], code=problem.code)
+
+
+class InvalidInput(ValueError):
+    """A value the caller supplied is malformed, e.g. a blank name or a level out of range.
+    Answered as 422. Distinct from plain ValueError, which also signals programming errors."""
+
+    code = "validation_error"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
