@@ -34,3 +34,11 @@ class Event(StrEnum):
     SLOT_UPDATED = "slot.updated"
     SLOT_REQUIREMENTS_CHANGED = "slot.requirements_changed"
     SLOT_REMOVED = "slot.removed"
+    # M12 assignments
+    ASSIGNMENT_PROPOSED = "assignment.proposed"
+    ASSIGNMENT_ACCEPTED = "assignment.accepted"
+    ASSIGNMENT_DECLINED = "assignment.declined"
+    ASSIGNMENT_WITHDRAWN = "assignment.withdrawn"
+    ASSIGNMENT_REMOVED = "assignment.removed"
+    ASSIGNMENT_COMPLETED = "assignment.completed"
+    ASSIGNMENT_CANCELLED = "assignment.cancelled"

@@ -16,7 +16,7 @@ from mission_control.domain.errors import Problem, RuleViolation
 from mission_control.domain.events import Event
 from mission_control.infra.repositories import Repos
 from mission_control.infra.repositories.models import Mission, Slot, User
-from mission_control.services.context import ServiceContext
+from mission_control.services.context import ServiceContext, return_to_draft
 from mission_control.services.missions.inputs import SlotInput
 
 # Owners and slot names
@@ -134,17 +134,9 @@ def record_change(
 ) -> None:
     """Apply the status `touch_for_change` (or the transfer rule) gave, then audit the change
     and, if a Pending mission went back to Draft, that return with its cause."""
-    if status != mission.status:
-        repos.missions.set_status(mission.id, status)
     ctx.audit(event, mission_id=mission.id, data=data)
     if status != mission.status:
-        ctx.audit(
-            Event.MISSION_RETURNED_TO_DRAFT,
-            mission_id=mission.id,
-            from_status=mission.status,
-            to_status=status,
-            data={"mission_name": data["mission_name"], "cause": event.value},
-        )
+        return_to_draft(ctx, repos, mission, event, str(data["mission_name"]))
 
 
 # Wording

@@ -383,7 +383,7 @@ Every error has the same shape, for every status code (401, 403, 404, 409, 422, 
 | 401 | Not authenticated | `invalid_credentials` `unauthenticated` |
 | 403 | Not allowed | `role_forbidden` `not_owner` `approver_is_creator` `approver_is_rostered` `self_skill_edit` `wrong_current_password` |
 | 404 | Not found or not visible | `not_found` |
-| 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation` `overlap` `unavailable` `insufficient_approvers` `invalidates_assignments` `invalidates_active_assignment` `mission_needs_a_slot` `already_owner`<br>**Admin:** `has_open_assignments` `owns_open_missions` `last_director` `skill_in_use` |
+| 409 | Conflicts with state or a rule | **State:** `mission_frozen` `mission_final` `invalid_transition` `already_decided`<br>**Rules:** `rule_violation` `overlap` `unavailable` `insufficient_approvers` `invalidates_assignments` `invalidates_active_assignment` `mission_needs_a_slot` `already_owner` `slot_full` `already_assigned`<br>**Admin:** `has_open_assignments` `owns_open_missions` `last_director` `skill_in_use` |
 | 422 | Invalid input | `validation_error` `password_too_short` |
 | 503 | Database busy, retry | `busy` |
 
@@ -406,6 +406,8 @@ Malformed mission and slot values are 422 `validation_error`, and every mistake 
 | `owner_not_active_lead` | The owner named for a new mission, or for a transfer, isn't a Mission Lead or is deactivated (inside a 409 `rule_violation`) | `user_id` |
 | `mission_needs_a_slot` | Removing a mission's only slot (also the 409's own code) | `slot_id` |
 | `already_owner` | Transferring a mission to the Lead who already owns it (also the 409's own code) | `user_id` |
+| `slot_full` | Proposing someone for a slot with no open places (the message names the slot and mission) | `slot_id` |
+| `already_assigned` | Proposing someone who already holds an open assignment on this mission (the message names their slot) | `assignment_id`, `crew_profile_id`, `mission_id` |
 
 ---
 

@@ -10,6 +10,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
+from mission_control.domain.enums import MissionStatus
 from mission_control.domain.errors import Forbidden, NotFound, Problem, RuleViolation
 from mission_control.domain.events import Event
 from mission_control.domain.permissions import NO_CONTEXT, Action, Actor, Context, authorize
@@ -78,6 +79,23 @@ def mission_context(repos: Repos, mission: Mission) -> Context:
         owner_id=mission.owner_id,
         created_by_id=mission.created_by_id,
         rostered_user_ids=repos.missions.rostered_user_ids(mission.id),
+    )
+
+
+def return_to_draft(
+    ctx: ServiceContext, repos: Repos, mission: Mission, cause: Event, mission_name: str
+) -> None:
+    """Send a Pending mission back to Draft after a change to it, so its approval round stops
+    counting, and audit the return with the event that caused it. Call it inside `ctx.write()`,
+    after auditing the change itself."""
+    if not repos.missions.set_status(mission.id, MissionStatus.DRAFT):
+        raise NotFound("Mission")
+    ctx.audit(
+        Event.MISSION_RETURNED_TO_DRAFT,
+        mission_id=mission.id,
+        from_status=mission.status,
+        to_status=MissionStatus.DRAFT,
+        data={"mission_name": mission_name, "cause": cause.value},
     )
 
 
