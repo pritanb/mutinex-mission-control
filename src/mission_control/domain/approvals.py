@@ -36,7 +36,8 @@ def approver_problems(
         return [Problem("role_forbidden", "Only Directors can approve or reject missions")]
     problems = conflict_problems(approver.user_id, created_by_id, rostered_user_ids)
     if approver.user_id in decided_this_round:
-        problems.append(Problem("already_decided", "You've already decided this round of approval"))
+        # A rejection ends the round, so anyone who has decided an open round approved it.
+        problems.append(Problem("already_decided", "You've already approved this round"))
     return problems
 
 

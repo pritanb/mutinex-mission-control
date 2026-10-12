@@ -1,5 +1,5 @@
-"""Missions: viewing them, creating them, editing their name, dates and slots, and handing them
-to another Lead.
+"""Missions: viewing them, creating them, editing their name, dates and slots, handing them to
+another Lead, and completing or cancelling them.
 
 Every change runs inside one write transaction, in this order:
 1. find the mission and its slot (missing, hidden or another organisation's is NotFound);
@@ -16,7 +16,9 @@ approval round stops counting; that return is audited with the change that cause
 alone leaves it Pending.
 
 Modules: `queries` (list, view), `changes` (create, rename or move, transfer), `slots` (add,
-edit, replace requirements, remove), with `inputs`, `rules`, `views` and `loading` behind them.
+edit, replace requirements, remove), `lifecycle` (complete, cancel), with `inputs`, `rules`,
+`views` and `loading` behind them. Completing and cancelling don't go through `touch_for_change`:
+they're allowed on an Active mission, and check their own state.
 """
 
 from mission_control.services.missions.changes import (
@@ -25,6 +27,7 @@ from mission_control.services.missions.changes import (
     update_mission,
 )
 from mission_control.services.missions.inputs import SlotInput
+from mission_control.services.missions.lifecycle import cancel_mission, complete_mission
 from mission_control.services.missions.queries import get_mission, list_missions
 from mission_control.services.missions.slots import (
     add_slot,
@@ -46,6 +49,8 @@ __all__ = [
     "SlotInput",
     "SlotView",
     "add_slot",
+    "cancel_mission",
+    "complete_mission",
     "create_mission",
     "get_mission",
     "list_missions",

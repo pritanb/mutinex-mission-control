@@ -87,7 +87,7 @@ def test_approver_problems_keeps_its_order_and_messages():
     assert [p.message for p in problems] == [
         "You can't approve a mission you created",
         "You can't approve a mission you're on",
-        "You've already decided this round of approval",
+        "You've already approved this round",
     ]
 
 

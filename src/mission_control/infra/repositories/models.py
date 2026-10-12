@@ -1,6 +1,8 @@
 """What the repositories return. Plain frozen records; no database types leak out."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 
 from mission_control.domain.dates import DateRange
 from mission_control.domain.enums import AssignmentStatus, MissionStatus, Role
@@ -107,3 +109,20 @@ class AssignmentSummary:
     slot_name: str
     status: AssignmentStatus
     reason: str | None
+
+
+@dataclass(frozen=True)
+class AuditEntry:
+    """One event in a mission's history: who did what, when, and the names at the time."""
+
+    id: int
+    at: datetime
+    actor_id: int
+    actor_name: str
+    event: str
+    assignment_id: int | None
+    crew_profile_id: int | None
+    from_status: str | None
+    to_status: str | None
+    reason: str | None
+    data: Mapping[str, object]

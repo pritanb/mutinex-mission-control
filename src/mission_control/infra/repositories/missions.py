@@ -120,6 +120,17 @@ class MissionRepo(MissionSlots, MissionCrew):
             id=mission_id,
         )
 
+    def start_round(self, mission_id: int, approvals_required: int) -> bool:
+        """Submit: the mission goes to pending approval in a new round, needing
+        `approvals_required` approvals however the organisation's setting changes later."""
+        return self._changed(
+            f"UPDATE missions SET status = 'pending_approval', approval_round = approval_round + 1,"
+            f" approvals_required = :required, updated_at = {NOW}"
+            " WHERE org_id = :org AND id = :id",
+            required=approvals_required,
+            id=mission_id,
+        )
+
     def set_owner(self, mission_id: int, owner_id: int) -> bool:
         return self._changed(
             f"UPDATE missions SET owner_id = :owner, updated_at = {NOW}"

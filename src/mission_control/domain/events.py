@@ -42,3 +42,6 @@ class Event(StrEnum):
     ASSIGNMENT_REMOVED = "assignment.removed"
     ASSIGNMENT_COMPLETED = "assignment.completed"
     ASSIGNMENT_CANCELLED = "assignment.cancelled"
+    # M13 approvals and ending a mission
+    MISSION_REJECTED = "mission.rejected"
+    MISSION_CANCELLED = "mission.cancelled"

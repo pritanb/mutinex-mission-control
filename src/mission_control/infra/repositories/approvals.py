@@ -22,6 +22,24 @@ class ApprovalRepo(Scoped):
         )
         return [_approval(r) for r in rows]
 
+    def record(
+        self, mission_id: int, round_: int, director_id: int, decision: str, reason: str | None
+    ) -> Approval:
+        """A Director's decision for this round. The database refuses a second decision by the
+        same Director in the same round, and a rejection without a reason."""
+        cur = self._exec(
+            "INSERT INTO approvals(org_id, mission_id, round, director_id, decision, reason)"
+            " VALUES (:org, :mission_id, :round, :director_id, :decision, :reason)",
+            mission_id=mission_id,
+            round=round_,
+            director_id=director_id,
+            decision=decision,
+            reason=reason,
+        )
+        made = self.get(cur.lastrowid)
+        assert made is not None
+        return made
+
 
 def _approval(r: sqlite3.Row) -> Approval:
     return Approval(
